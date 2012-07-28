@@ -18,8 +18,13 @@ TODO:
   we probably want to use radioIDs... it'd be nice to
   find a way to track individual monitors though.
 
-* Use a new class to store data for each sensor
+* Use a new class to store data for each sensor instead of using the ugly dict I currently use.
   (keeping track of average delay between received data etc)
+
+* Handle case when script starts and config file asks for 
+  a serial port which isn't valid.
+
+* The the FIXMEs
 
 """
 
@@ -48,6 +53,9 @@ class CurrentCost(object):
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
         watts = None
+        sensor = None
+        radioID = None
+        UNIXtime = None
 
         while watts == None and sigIntReceived == False:
             try:
@@ -64,6 +72,9 @@ class CurrentCost(object):
             except Exception, inst: # Catch XML errors (occasionally the current cost outputs malformed XML)
                 print("XML error: " + str(inst) + "\n", file=sys.stderr)
                 line = None
+            # FIXME: This shouldn't catch all exceptions. Instead it should just catch the specific exception
+            # caused by the XML error.  This current design produces a misleading error when a Current Cost
+            # is unplugged while the script is running.
 
         return sensor, radioID, watts, UNIXtime
 
@@ -86,7 +97,7 @@ class TimeInfo(object):
             self.max  = self.current
             self.min  = self.current
         else:
-            self.mean = ((self.mean*(self.count-1))+self.current) / float(self.count)
+            self.mean = ((float(self.mean)*(self.count-1))+self.current) / self.count
             if self.current > self.max: self.max = self.current
             if self.current < self.min: self.min = self.current
             

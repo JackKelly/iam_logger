@@ -11,6 +11,7 @@
     </mapping>
   </monitor>
 
+<!--
   <monitor id="B">
     <serialport>/dev/ttyUSB1</serialport>
     <mapping>
@@ -18,6 +19,7 @@
       2, 11, hello
     </mapping>
   </monitor>
+-->
 
   <monitor id="C">
     <serialport>/dev/ttyUSB2</serialport>
