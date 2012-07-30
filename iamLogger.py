@@ -118,8 +118,9 @@ class CurrentCost(threading.Thread):
                 tree = ET.XML(line)
                 
                 # Check if this is histogram data from the current cost (which we're not interested in)
+                # (This could also be done by checking the size of 'line' - this would probably be faster although
+                #  possibly the size of a "histogram" is variable)
                 if tree.findtext('hist') != None:
-                    print("Skipping histogram data from Current Cost \'{}\'.\n".format(self.id), file=sys.stderr)
                     continue
                 
                 # Check if all the elements we're looking for exist in this XML
