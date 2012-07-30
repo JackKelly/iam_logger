@@ -15,10 +15,12 @@ import signal
 TODO: Cope with fact that we can't trust the serial ports; 
   we probably want to use radioIDs... it'd be nice to
   find a way to track individual monitors though.
+  We should also take advantage of the fact that all 
+  monitors record aggregate data. We could merge these together.
 """
 
 """
-TODO: Send data to disk; handle mappings
+TODO: handle mappings
 """
 
 ######################################
