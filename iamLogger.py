@@ -119,6 +119,7 @@ class CurrentCost(threading.Thread):
                 
                 # Check if this is histogram data from the current cost (which we're not interested in)
                 if tree.findtext('hist') != None:
+                    print("Skipping histogram data from Current Cost \'{}\'.\n".format(self.id), file=sys.stderr)
                     continue
                 
                 # Check if all the elements we're looking for exist in this XML
