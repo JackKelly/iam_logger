@@ -26,7 +26,7 @@ TODO: Send data to disk; handle mappings
 ######################################
 
 abort = False # Make this True to halt all threads
-
+directory = None # The directory to write data to
 
 #####################################
 #     SENSOR CLASS                  #
@@ -51,12 +51,17 @@ class Sensor(object):
         
     def __str__(self):
         return '{:>7d}{}{:>9} {}'.format(self.watts, self.timeInfo, self.radioID, self.radioIDs)
+    
+    def writeData(self):
+        return '{:d}\t{}\t{}\n'.format(int(round(self.timeInfo.lastSeen)), self.watts, self.radioID)
 
 
 #####################################
 #     CURRENT COST CLASS            #
 #####################################
 class CurrentCost(threading.Thread):
+    
+    id = None # The ID for this Current Cost.  e.g. "A" or "B" or "C" etc.
 
     def __init__(self, port ):
         threading.Thread.__init__(self)
@@ -159,6 +164,18 @@ class CurrentCost(threading.Thread):
         self.CCversion = data['src']
         
 
+    def writeToDisk(self, sensorNum):
+        filename =  directory + "channel_" + self.id + str(sensorNum) + ".dat"
+        try:
+            filehandle = open(filename, 'a+')
+        except Exception, e:
+            print("Failed to open file {}.\n".format(filename), str(e), sep="\n", file=sys.stderr)
+            raise
+
+        filehandle.write( self.sensors[sensorNum].writeData() )
+        filehandle.close()
+        
+
     def update(self):
         """Read sensor data from serial port."""
 
@@ -174,7 +191,8 @@ class CurrentCost(threading.Thread):
             self.sensors[sensor] = Sensor()
         
         self.sensors[sensor].update(watts, radioID)
-
+        
+        self.writeToDisk( sensor )
 
     def __str__(self):
         string  = "----------------\n"
@@ -308,6 +326,7 @@ class Manager(object):
 
 def loadConfig():
     configTree    = ET.parse("config.xml") # load config from config file
+    global directory
     directory     = configTree.findtext("directory") # File to save data to
     monitorsETree = configTree.findall("monitor")
 
@@ -316,7 +335,6 @@ def loadConfig():
     for monitor in monitorsETree:
         currentCost    = CurrentCost( monitor.findtext("serialport") )
         currentCost.id = monitor.attrib['id']
-        currentCost.directory = directory
         
         monitorMapping = monitor.findtext("mapping")
         mapping = monitorMapping.split("\n")
