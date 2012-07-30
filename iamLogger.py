@@ -86,13 +86,13 @@ class CurrentCost(threading.Thread):
             except:
                 pass
          
-        print("opening serial port ", self.port)
+        print("Opening serial port ", self.port, file=sys.stderr)
         
         try:
             self.serial = serial.Serial(self.port, 57600)
             self.serial.flushInput()
         except OSError, e:
-            print("Serial port " + self.port + " unavailable.  Is another process using it? \nFull error: " + str(e) , file=sys.stderr)
+            print("Serial port " + self.port + " unavailable.  Is another process using it?", str(e), sep="\n", file=sys.stderr)
             raise
         except serial.SerialException, e:
             print("serial.SerialException:", str(e), "Is the correct USB port specified in config.xml?\n", sep="\n", file=sys.stderr)
@@ -116,16 +116,24 @@ class CurrentCost(threading.Thread):
             try:
                 line = self.serial.readline()
                 tree = ET.XML(line)
+                
+                # Check if this is histogram data from the current cost (which we're not interested in)
+                if tree.findtext('hist') != None:
+                    continue
+                
+                # Check if all the elements we're looking for exist in this XML
                 success = True
                 for key in data.keys():
                     data[key] = tree.findtext(key)
                     if data[key] == None:
                         success = False
-                        print("Key {} not found in XML:\n{}".format(key, line), file=sys.stderr)
+                        print("Key \'{}\' not found in XML:\n{}".format(key, line), file=sys.stderr)
                         break
                     
                 if success:
                     return data
+                else:
+                    continue
                 
             except OSError, e: # catch errors raised by serial.readline
                 print("Serial port " + self.port + " unavailable.  Is another process using it?", str(e), sep="\n", file=sys.stderr)
@@ -136,6 +144,7 @@ class CurrentCost(threading.Thread):
             except ValueError, e: # Attempting to use a port that is not open
                 print("ValueError: ", str(e), sep="\n", file=sys.stderr)
             
+            # We should only execute the following after an exception
             # Retry...
             time.sleep(1) 
             print("retrying... retry number {} of {}\n".format(i, RETRIES), file=sys.stderr)
