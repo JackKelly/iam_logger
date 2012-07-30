@@ -35,19 +35,21 @@ class Sensor(object):
     
     def __init__(self):
         self.timeInfo = TimeInfo()        
-        self.radioIDs = []        
+        self.radioIDs = [] # list of all radioIDs seen by this sensor
+        self.radioID  = None # current radioID
         
         
     def update(self, watts, radioID):        
         self.timeInfo.update()
         self.watts = watts
         
+        self.radioID = radioID
         if radioID not in self.radioIDs:
             self.radioIDs.append(radioID)
         
         
     def __str__(self):
-        return '{:>9d}{:>11}{}'.format(self.watts, self.radioIDs, self.timeInfo)
+        return '{:>7d}{}{:>9} {}'.format(self.watts, self.timeInfo, self.radioID, self.radioIDs)
 
 
 #####################################
@@ -162,16 +164,20 @@ class CurrentCost(threading.Thread):
 
 
     def __str__(self):
-        string  = "monitorID = {}\n".format(self.id)
+        string  = "----------------\n"
+        string += "monitorID = {}\n".format(self.id)
         string += "port      = {}\n".format(self.port)        
         string += "DSB       = {}\n".format(self.dsb)
         string += "Version   = {}\n\n".format(self.CCversion)
+        string += "               -----PERIOD STATS (secs)--\n"
+        string += "SENSOR  WATTS  MEAN    MAX    MIN CURRENT COUNT  RADIOID RADIOIDs\n\n"
         keys = self.sensors.keys()
         keys.sort()
         for key in keys:
             sensor  = self.sensors[key]
-            string += '{:>3}{}\n'.format(key, str(sensor))        
+            string += '{:>5}{}\n'.format(key, str(sensor))        
         
+        string += "\n"
         return string
 
 
@@ -276,8 +282,7 @@ class Manager(object):
     
             
     def __str__(self):
-        string  = "                          ------PERIOD STATS (secs)----\n"
-        string += "SENSOR WATTS  RADIOID     MEAN    MAX    MIN   CURRENT COUNT\n\n"
+        string = ""
         for monitor in self.monitors:
             string += str(monitor)
             
