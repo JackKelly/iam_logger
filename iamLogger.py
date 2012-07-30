@@ -35,7 +35,7 @@ class Sensor(object):
     
     def __init__(self):
         self.timeInfo = TimeInfo()        
-        self.radioIDs = [] # list of all radioIDs seen by this sensor
+        self.radioIDs = {} # list of all radioIDs seen by this sensor
         self.radioID  = None # current radioID
         
         
@@ -44,9 +44,10 @@ class Sensor(object):
         self.watts = watts
         
         self.radioID = radioID
-        if radioID not in self.radioIDs:
-            self.radioIDs.append(radioID)
-        
+        if radioID in self.radioIDs.keys():
+            self.radioIDs[radioID] += 1
+        else:
+            self.radioIDs[radioID] = 0
         
     def __str__(self):
         return '{:>7d}{}{:>9} {}'.format(self.watts, self.timeInfo, self.radioID, self.radioIDs)
@@ -101,15 +102,24 @@ class CurrentCost(threading.Thread):
             raise
             
 
-    def readXML(self):
+    def readXML(self, data):
         """Reads a line from the serial port and returns an ElementTree"""
         RETRIES = 10
         for i in range(RETRIES):
             try:
                 line = self.serial.readline()
                 tree = ET.XML(line)
-                if tree.findtext("dsb") != None:
-                    return tree # if we haven't raised an exception then break out of retry loop 
+                success = True
+                for key in data.keys():
+                    data[key] = tree.findtext(key)
+                    if data[key] == None:
+                        success = False
+                        print("Key {} not found in XML:\n{}".format(key, line), file=sys.stderr)
+                        break
+                    
+                if success:
+                    return data
+                
             except OSError, e: # catch errors raised by serial.readline
                 print("Serial port " + self.port + " unavailable.  Is another process using it?", str(e), sep="\n", file=sys.stderr)
             except serial.SerialException, e:
@@ -143,19 +153,22 @@ class CurrentCost(threading.Thread):
 
     def _getInfo(self):
         """Get DSB and version number from Current Cost monitor"""
-        tree           = self.readXML()
-        self.dsb       = tree.findtext("dsb") 
-        self.CCversion = tree.findtext("src")
+        data = {'dsb': None, 'src': None}
+        data           = self.readXML( data )
+        self.dsb       = data['dsb'] 
+        self.CCversion = data['src']
         
 
     def update(self):
         """Read sensor data from serial port."""
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
-        tree     = self.readXML()
-        radioID  = int( tree.findtext("id")        )
-        sensor   = int( tree.findtext("sensor")    )
-        watts    = int( tree.findtext("ch1/watts") )
+        data = {'id': None, 'sensor': None, 'ch1/watts': None}
+        
+        data     = self.readXML( data )
+        radioID  = int( data['id']        )
+        sensor   = int( data['sensor']    )
+        watts    = int( data['ch1/watts'] )
 
         if sensor not in self.sensors.keys():
             self.sensors[sensor] = Sensor()
@@ -271,7 +284,7 @@ class Manager(object):
         duplicateRadioIDs = set([])
         for monitor in self.monitors:
             for sensorNum, sensorData in monitor.sensors.iteritems():
-                for radioID in sensorData.radioIDs:
+                for radioID in sensorData.radioIDs.keys():
                     if radioID in radioIDs:
                         duplicateRadioIDs = set.union(duplicateRadioIDs, [radioID])
                     else:
