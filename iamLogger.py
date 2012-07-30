@@ -18,46 +18,86 @@ TODO: Cope with fact that we can't trust the serial ports;
 """
 
 """
-TODO: Use a new class to store data for each sensor instead of using the ugly dict I currently use.
-  (keeping track of average delay between received data etc)
-"""
-
-"""
-TODO: Handle case when script starts and config file asks for 
-  a serial port which isn't valid.
-"""
-
-"""
-TODO: Fix the FIXMEs
+TODO: Send data to disk; handle mappings
 """
 
 ######################################
 #     GLOBALS                        #
 ######################################
 
-exceptionRaised = False
-sigIntReceived = False
+abort = False # Make this True to halt all threads
+
+
+#####################################
+#     SENSOR CLASS                  #
+#####################################
+class Sensor(object):
+    
+    def __init__(self):
+        self.timeInfo = TimeInfo()        
+        self.radioIDs = []        
+        
+        
+    def update(self, watts, radioID):        
+        self.timeInfo.update()
+        self.watts = watts
+        
+        if radioID not in self.radioIDs:
+            self.radioIDs.append(radioID)
+        
+        
+    def __str__(self):
+        return '{:>9d}{:>11}{}'.format(self.watts, self.radioIDs, self.timeInfo)
+
 
 #####################################
 #     CURRENT COST CLASS            #
 #####################################
+class CurrentCost(threading.Thread):
 
-class CurrentCost(object):
-
-    def __init__(self, port, mapping, monitorID):
-        # open serial port
+    def __init__(self, port ):
+        threading.Thread.__init__(self)
+        global abort        
         try:
             self.port = port
-            print("opening serial port ", port)
-            self.serial = serial.Serial(self.port, 57600)
-            self.serial.flushInput()
+            self.serial = None
+            self._openPort()
             self._getInfo()
-            self.mapping   = mapping
-            self.monitorID = monitorID
-        except OSError, e:
-            print("Serial port " + port + " unavailable.  Is another process using it? \nFull error: " + str(e) , file=sys.stderr)
+            self.sensors   = {}
+        except (OSError, serial.SerialException):
+            abort = True
             raise
 
+    def _openPort(self):
+        if self.serial != None and self.serial.isOpen():
+            print("Closing serial port {}\n".format(self.port), file=sys.stderr)
+            try:
+                self.serial.close()
+            except:
+                pass
+         
+        print("opening serial port ", self.port)
+        
+        try:
+            self.serial = serial.Serial(self.port, 57600)
+            self.serial.flushInput()
+        except OSError, e:
+            print("Serial port " + self.port + " unavailable.  Is another process using it? \nFull error: " + str(e) , file=sys.stderr)
+            raise
+        except serial.SerialException, e:
+            print("serial.SerialException:", str(e), "Is the correct USB port specified in config.xml?\n", sep="\n", file=sys.stderr)
+            raise
+
+
+    def run(self):
+        global abort
+        try:
+            while abort == False:
+                self.update()
+        except:
+            abort = True
+            raise
+            
 
     def readXML(self):
         """Reads a line from the serial port and returns an ElementTree"""
@@ -66,191 +106,182 @@ class CurrentCost(object):
             try:
                 line = self.serial.readline()
                 tree = ET.XML(line)
-                break # if we haven't raised an exception the break out of retry loop 
-            except OSError, inst: # catch errors raised by serial.readline
-                print("Serial port " + self.port + " unavailable.  Is another process using it?", file=sys.stderr)
-                raise
-            except Exception, inst: # Catch XML errors (occasionally the current cost outputs malformed XML)
-                self.serial.flushInput()                
-                print("XML error: " + str(inst), line, "retrying... retry number {} of {}".format(i, RETRIES), sep="\n", file=sys.stderr)
-                # FIXME: This shouldn't catch all exceptions. Instead it should just catch the specific exception
-                # caused by the XML error.  This current design produces a misleading error when a Current Cost
-                # is unplugged while the script is running.            
+                if tree.findtext("dsb") != None:
+                    return tree # if we haven't raised an exception then break out of retry loop 
+            except OSError, e: # catch errors raised by serial.readline
+                print("Serial port " + self.port + " unavailable.  Is another process using it?", str(e), sep="\n", file=sys.stderr)
+            except serial.SerialException, e:
+                print("SerialException on port {}:".format(self.port), str(e), "Has the device been unplugged?\n", sep="\n", file=sys.stderr)
+            except ET.ParseError, e: # Catch XML errors (occasionally the current cost outputs malformed XML)
+                print("XML error: ", str(e), line, sep="\n", file=sys.stderr)
+            except ValueError, e: # Attempting to use a port that is not open
+                print("ValueError: ", str(e), sep="\n", file=sys.stderr)
             
-        return tree
-
+            # Retry...
+            time.sleep(1) 
+            print("retrying... retry number {} of {}\n".format(i, RETRIES), file=sys.stderr)
+            
+            # Try to flush the serial port.
+            try:
+                self.serial.flushInput()
+            except: # Ignore errors.  We're going to retry anyway.
+                pass
+            
+            # Try to re-open the port.
+            try:
+                self._openPort()
+            except: # Ignore errors.  We're going to retry anyway.
+                pass
+        
+        # If we get to here then we have failed after every retry    
+        global abort
+        abort = True
+        raise Exception("readXML failed after {} retries".format(RETRIES))
+        
 
     def _getInfo(self):
         """Get DSB and version number from Current Cost monitor"""
-        tree = self.readXML()
-        self.dsb = tree.findtext("dsb") 
+        tree           = self.readXML()
+        self.dsb       = tree.findtext("dsb") 
         self.CCversion = tree.findtext("src")
         
 
-    def read(self):
+    def update(self):
         """Read sensor data from serial port."""
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
         tree     = self.readXML()
-        radioID  = tree.findtext("id")
-        sensor   = tree.findtext("sensor")
-        watts    = tree.findtext("ch1/watts")
-        UNIXtime = int(round(time.time()))
+        radioID  = int( tree.findtext("id")        )
+        sensor   = int( tree.findtext("sensor")    )
+        watts    = int( tree.findtext("ch1/watts") )
 
-        return sensor, radioID, watts, UNIXtime
+        if sensor not in self.sensors.keys():
+            self.sensors[sensor] = Sensor()
+        
+        self.sensors[sensor].update(watts, radioID)
+
+
+    def __str__(self):
+        string  = "monitorID = {}\n".format(self.id)
+        string += "port      = {}\n".format(self.port)        
+        string += "DSB       = {}\n".format(self.dsb)
+        string += "Version   = {}\n\n".format(self.CCversion)
+        keys = self.sensors.keys()
+        keys.sort()
+        for key in keys:
+            sensor  = self.sensors[key]
+            string += '{:>3}{}\n'.format(key, str(sensor))        
+        
+        return string
 
 
 class TimeInfo(object):
     """Class for recording simple statistics about time. Useful during IAM testing."""
-    def __init__(self, UNIXtime):
-        self.lastSeen = UNIXtime
-        self.mean = None
-        self.max = None
-        self.min = None
-        self.current = None
-        self.count = 0
+    
+    def __init__(self):
+        self.count    = -1
+        self.lastSeen = 0
 
-    def newTime(self, UNIXtime):
-        self.current = UNIXtime - self.lastSeen
-        self.count += 1
-        if self.mean == None:
+    def update(self):
+        unixTime = time.time()
+        self.count += 1        
+        self.current = unixTime - self.lastSeen
+        
+        if self.count == 0: # this is the first time we've run
+            self.current = None
+            self.mean = None
+            self.max  = None
+            self.min  = None
+        elif self.count == 1:
             self.mean = self.current
-            self.max = self.current
-            self.min = self.current
+            self.max  = self.current
+            self.min  = self.current
         else:
             self.mean = ((float(self.mean) * (self.count - 1)) + self.current) / self.count
             if self.current > self.max: self.max = self.current
             if self.current < self.min: self.min = self.current
             
-        self.lastSeen = UNIXtime
+        self.lastSeen = unixTime
+
 
     def __str__(self):
-        if self.mean == None:
+        if self.count < 1:
             return "     -       -      -      -      {:d}".format(self.count)
         else:
-            return '{:>7.2f}{:>7d}{:>7d}{:>7d}{:>7d}'.format(self.mean, self.max, self.min, self.current, self.count)
-
-class IAMTester(threading.Thread):
-
-    def __init__(self, dataStore, currentCost):
-        threading.Thread.__init__(self)
-        self.dataStore = dataStore
-        self.sensors = self.dataStore.new()
-        self.currentCost = currentCost
+            return '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'.format(self.mean, self.max, self.min, self.current, self.count)
 
 
-    def _run(self):
-        lock = threading.Lock() # I don't think locking is strictly necessary
-                                # (because each thread has its own self.sensors object) 
-                                # but it's probably better to be safe than sorry, just in case something 
-                                # odd happens because dataStore keeps a list of every sensor)
-        while sigIntReceived == False:
-            sensor, radioID, watts, UNIXtime = self.currentCost.read()
-            if sensor not in self.sensors.keys():
-                lock.acquire()
-                self.sensors[sensor] = {'radioID': [radioID], 'timeInfo': TimeInfo(UNIXtime)}
-                lock.release()
-            else:
-                lock.acquire()
-                self.sensors[sensor]['timeInfo'].newTime(UNIXtime)
-                lock.release()
-                if radioID not in self.sensors[sensor]['radioID']:
-                    lock.acquire()
-                    self.sensors[sensor]['radioID'].append(radioID)
-                    lock.release()
-            lock.acquire()
-            self.sensors[sensor]['watts'] = watts
-            lock.release()
-
-    def run(self):
-        try:
-            self._run()
-        except:
-            global exceptionRaised
-            exceptionRaised = True
-            raise
-
-
-class DataStore(object):
-    def __init__(self):
-        self.monitors = [] # Each item in this list represents the data from a single monitor
-
-    def new(self):
-        self.monitors.append({})
-        return self.monitors[-1]
-
-    def printAndSleep(self):
-        self.print()
-        time.sleep(1)
+class Manager(object):
+    """
+    Singleton. Used to manage multiple CurrentCost objects. 
+    """
     
-    def print(self):
-        os.system('clear')
-        radioIDs = set([])
-        monitorNum = 0
+    def __init__(self, monitors):
+        self.monitors = monitors
+        
+        
+    def run(self, noDisplay=True):
+        # Start each monitor thread
+        for monitor in self.monitors:
+            monitor.start()
+        
+        # Use this main thread of control to continually
+        # print out info
+        if noDisplay:
+            print("Press CTRL+C to stop.\n")
+            signal.pause()
+        else:
+            while abort == False:
+                os.system('clear')
+                print(str(self))
+                self.checkDuplicateRadioIDs()
+                print("\nPress CTRL+C to stop.\n")                
+                time.sleep(1)            
+        
+        self.stop()
+        
 
+    def stop(self):
+        global abort
+        abort = True
+        
+        print("Stopping...")
+
+        # Don't exit the main thread until our worker threads have all quit
+        for monitor in self.monitors:
+            print("Waiting for monitor {} to stop...\n".format(monitor.id))
+            monitor.join()
+            
+        print("Done.\n")
+
+
+    def checkDuplicateRadioIDs(self):
+        """
+        Look across all monitors to check for duplicated radioIDs
+        """
+        
         # make a list of radioIDs
+        radioIDs = set([])
         duplicateRadioIDs = set([])
         for monitor in self.monitors:
-            for sensorNum, sensorData in monitor.iteritems():
-                for radioID in sensorData['radioID']:
+            for sensorNum, sensorData in monitor.sensors.iteritems():
+                for radioID in sensorData.radioIDs:
                     if radioID in radioIDs:
                         duplicateRadioIDs = set.union(duplicateRadioIDs, [radioID])
                     else:
                         radioIDs = set.union(radioIDs, [radioID])
-
-        # print
-        print("                          ------PERIOD STATS (secs)----")
-        print("SENSOR WATTS  RADIOID     MEAN     MAX    MIN   CURRENT COUNT")
+                        
+        if len(duplicateRadioIDs) > 0:
+            print("\nDuplicate radio IDs: {}\n".format(duplicateRadioIDs))
+    
+            
+    def __str__(self):
+        string  = "                          ------PERIOD STATS (secs)----\n"
+        string += "SENSOR WATTS  RADIOID     MEAN    MAX    MIN   CURRENT COUNT\n\n"
         for monitor in self.monitors:
-            print('\nmonitorNum = ', monitorNum)
-            monitorNum += 1
-            keys = monitor.keys()
-            keys.sort()
-            for key in keys:
-                sensor = monitor[key]
-                msg = '{:>3}{:>9d}{:>11}'.format(key, int(sensor['watts']), sensor['radioID'])
-                msg += str(sensor['timeInfo'])
-                for radioID in monitor[key]['radioID']:
-                    if radioID in duplicateRadioIDs:
-                        # this radioID has been seen more than once so colour it red
-                        msg = '\033[91m' + msg + '\033[0m'
-                        break
-                print(msg)
-
-        print("\nPress CTRL+C to stop.\n")
-
-
-#######################################
-# TEST IAMs                           #
-#######################################
-
-def testIAMs(config, threads):
-    # initialise serial port
-    dataStore = DataStore()
-
-    # launch threads to monitor each serial port
-    for monitor in config['monitors']:
-        thread = IAMTester(dataStore, monitor)
-        thread.start()
-        threads.append(thread)
-
-    # continually print to screen until either an exception is raised
-    # in a worker thread or SIGINT is received
-    global sigIntReceived
-    global exceptionRaised
-    while exceptionRaised == False and sigIntReceived == False:
-        try:
-            dataStore.printAndSleep()
-        except Exception, e:
-            print("ERROR: ", e, file=sys.stderr)
-            exceptionRaised = True
-            break
-
-    sigIntReceived = True
-
-    print("Shutting down...")
-
-    return threads
+            string += str(monitor)
+            
+        return string
 
 
 #########################################
@@ -259,16 +290,17 @@ def testIAMs(config, threads):
 
 def loadConfig():
     configTree    = ET.parse("config.xml") # load config from config file
-    filename      = configTree.findtext("filename") # File to save data to
+    directory     = configTree.findtext("directory") # File to save data to
     monitorsETree = configTree.findall("monitor")
 
     monitors = []
 
     for monitor in monitorsETree:
-        monitorID      = monitor.attrib['id']
-        monitorSerial  = monitor.findtext("serialport")
+        currentCost    = CurrentCost( monitor.findtext("serialport") )
+        currentCost.id = monitor.attrib['id']
+        currentCost.directory = directory
+        
         monitorMapping = monitor.findtext("mapping")
-
         mapping = monitorMapping.split("\n")
         mappingMatrix = []
         for line in mapping:
@@ -276,9 +308,11 @@ def loadConfig():
             if strippedLine != '':
                 mappingMatrix.append([i.strip() for i in strippedLine.split(',')])
 
-        monitors.append(CurrentCost(port = monitorSerial, mapping = mappingMatrix, monitorID = monitorID))
+        currentCost.mapping = mappingMatrix
 
-    return {'filename': filename, 'monitors': monitors}
+        monitors.append( currentCost )
+
+    return monitors
 
 
 #########################################
@@ -287,9 +321,9 @@ def loadConfig():
 #########################################
 
 def signalHandler(signal, frame):
-    print("SIGINT received.")
-    global sigIntReceived
-    sigIntReceived = True
+    print("\nSIGINT received.")
+    global abort
+    abort = True
 
 
 ########################################
@@ -299,26 +333,23 @@ def signalHandler(signal, frame):
 if __name__ == "__main__":
     # Process command line args
     parser = argparse.ArgumentParser(description='Log data from multiple Current Cost IAMs.')
-    parser.add_argument('--testIAMs', dest='testIAMs', action='store_const',
-                        const=True, default=False, help='Mode to help diagnose problems with IAMs')
+    parser.add_argument('--noDisplay', dest='noDisplay', action='store_const',
+                        const=True, default=False, help='Do not display info to std out. Useful for use with nohup command.')
     args = parser.parse_args()
 
     # load config
-    config = loadConfig()
+    monitors = loadConfig()
 
     # register SIGINT handler
     print("setting signal handler")
     signal.signal(signal.SIGINT, signalHandler)
 
-    # list for storing all our threads
-    threads = []
+    manager = Manager(monitors)        
 
-    # run relevant function
-    if args.testIAMs:
-        threads = testIAMs(config, threads)
+    print(args.noDisplay)
 
-    # Don't exit the main thread until our worker threads have all quit
-    for thread in threads:
-        thread.join()
-
-    print("Done.\n")
+    try:
+        manager.run(args.noDisplay)
+    except:
+        manager.stop()
+        raise                
