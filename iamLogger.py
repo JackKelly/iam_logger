@@ -9,6 +9,12 @@ import argparse
 import threading
 import signal
 
+# TODO: Automatically transfer files from study computer to living room computer for checking; then automatically upload to github once a week.
+
+# TODO: Write a script to check sync between aggregate files on both computers
+
+# TODO: Script which checks that certain files are being updated and emails me if not.
+
 ######################################
 #     GLOBALS                        #
 ######################################
@@ -278,7 +284,7 @@ class CurrentCost(threading.Thread):
         data = {'dsb': None, 'src': None}
         data           = self.readXML( data )
         self.dsb       = data['dsb'] 
-        self.CCversion = data['src']
+        self.ccVersion = data['src']
         
 
     def update(self):
@@ -292,11 +298,17 @@ class CurrentCost(threading.Thread):
         ccChannel = int( data['sensor']    ) # channel on this Current Cost
         watts     = int( data['ch1/watts'] )
         
+        lock = threading.Lock()
+        
         if radioID not in CurrentCost.sensors.keys():
             print("making new Sensor for radio ID {}".format(radioID),file=sys.stderr)
-            CurrentCost.sensors[radioID] = Sensor(radioID) 
+            lock.acquire()
+            CurrentCost.sensors[radioID] = Sensor(radioID)
+            lock.release()
         
+        lock.acquire()
         CurrentCost.sensors[radioID].update(watts, ccChannel, self)
+        lock.release()
         
         # Maintain a local dict of sensors connected to this current cost
         self.localSensors[ ccChannel ] = CurrentCost.sensors[ radioID ]
@@ -305,7 +317,7 @@ class CurrentCost(threading.Thread):
     def __str__(self):
         string  = "port      = {}\n".format(self.port)        
         string += "DSB       = {}\n".format(self.dsb)
-        string += "Version   = {}\n\n".format(self.CCversion)    
+        string += "Version   = {}\n\n".format(self.ccVersion)    
         string += "                                         |---PERIOD STATS (secs)---|\n"
         string += Sensor.headers
         
