@@ -17,6 +17,8 @@ import signal
 
 # TODO: Script which checks that certain files are being updated and emails me if not.
 
+# TODO: Get old laptop running in office for logging.
+
 ######################################
 #     GLOBALS                        #
 ######################################
