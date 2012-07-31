@@ -9,6 +9,8 @@ import argparse
 import threading
 import signal
 
+# TODO: Order new current cost and some more IAMs (check blog)
+
 # TODO: When in noDisplay mode, write stats summary to a file once a minute.
 
 # TODO: Automatically transfer files from study computer to living room computer for checking; then automatically upload to github once a week.
