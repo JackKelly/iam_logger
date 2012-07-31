@@ -65,10 +65,11 @@ class CurrentCost(threading.Thread):
     
     id = None # The ID for this Current Cost.  e.g. "A" or "B" or "C" etc.
 
-    def __init__(self, port ):
+    def __init__(self, port):
         threading.Thread.__init__(self)
         global abort        
         try:
+            self.printXML = False
             self.port = port
             self.serial = None
             self._openPort()
@@ -102,19 +103,58 @@ class CurrentCost(threading.Thread):
     def run(self):
         global abort
         try:
-            while abort == False:
-                self.update()
+            if self.printXML == True: # Just print XML to the screen
+                while abort == False:
+                    print( str(self.port), self.readLine(), sep="\n" )
+            else:            
+                while abort == False:
+                    self.update()
         except:
             abort = True
             raise
+    
+    
+    def readLine(self):
+        """Simply read a line from the serial port. Blocking.  On error, print useful message and raise the error."""
+        try:
+            line = self.serial.readline()
+        except OSError, e: # catch errors raised by serial.readline
+            print("Serial port " + self.port + " unavailable.  Is another process using it?", str(e), sep="\n", file=sys.stderr)
+            raise
+        except serial.SerialException, e:
+            print("SerialException on port {}:".format(self.port), str(e), "Has the device been unplugged?\n", sep="\n", file=sys.stderr)
+            raise
+        except ValueError, e: # Attempting to use a port that is not open
+            print("ValueError: ", str(e), sep="\n", file=sys.stderr)
+            raise
+        
+        return line
+
+
+    def resetSerial(self, i, RETRIES):
+        """ Reset the serial port"""            
+        time.sleep(1) 
+        print("retrying... resetSerial number {} of {}\n".format(i, RETRIES), file=sys.stderr)
             
+        # Try to flush the serial port.
+        try:
+            self.serial.flushInput()
+        except: # Ignore errors.  We're going to retry anyway.
+            pass
+            
+        # Try to re-open the port.
+        try:
+            self._openPort()
+        except: # Ignore errors.  We're going to retry anyway.
+            pass
+        
 
     def readXML(self, data):
         """Reads a line from the serial port and returns an ElementTree"""
         RETRIES = 10
         for i in range(RETRIES):
             try:
-                line = self.serial.readline()
+                line = self.readLine()
                 tree = ET.XML(line)
                 
                 # Check if this is histogram data from the current cost (which we're not interested in)
@@ -137,31 +177,11 @@ class CurrentCost(threading.Thread):
                 else:
                     continue
                 
-            except OSError, e: # catch errors raised by serial.readline
-                print("Serial port " + self.port + " unavailable.  Is another process using it?", str(e), sep="\n", file=sys.stderr)
-            except serial.SerialException, e:
-                print("SerialException on port {}:".format(self.port), str(e), "Has the device been unplugged?\n", sep="\n", file=sys.stderr)
+            except (OSError, serial.SerialException, ValueError): # raised by readLine()
+                self.resetSerial(i, RETRIES)
             except ET.ParseError, e: # Catch XML errors (occasionally the current cost outputs malformed XML)
                 print("XML error: ", str(e), line, sep="\n", file=sys.stderr)
-            except ValueError, e: # Attempting to use a port that is not open
-                print("ValueError: ", str(e), sep="\n", file=sys.stderr)
-            
-            # We should only execute the following after an exception
-            # Retry...
-            time.sleep(1) 
-            print("retrying... retry number {} of {}\n".format(i, RETRIES), file=sys.stderr)
-            
-            # Try to flush the serial port.
-            try:
-                self.serial.flushInput()
-            except: # Ignore errors.  We're going to retry anyway.
-                pass
-            
-            # Try to re-open the port.
-            try:
-                self._openPort()
-            except: # Ignore errors.  We're going to retry anyway.
-                pass
+                self.resetSerial(i, RETRIES)
         
         # If we get to here then we have failed after every retry    
         global abort
@@ -266,18 +286,20 @@ class Manager(object):
     Singleton. Used to manage multiple CurrentCost objects. 
     """
     
-    def __init__(self, monitors):
+    def __init__(self, monitors, args):
         self.monitors = monitors
+        self.args     = args
         
         
-    def run(self, noDisplay=True):
+    def run(self):
         # Start each monitor thread
         for monitor in self.monitors:
+            monitor.printXML = self.args.printXML
             monitor.start()
         
         # Use this main thread of control to continually
         # print out info
-        if noDisplay:
+        if self.args.noDisplay or self.args.printXML:
             print("Press CTRL+C to stop.\n")
             signal.pause()
         else:
@@ -384,6 +406,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Log data from multiple Current Cost IAMs.')
     parser.add_argument('--noDisplay', dest='noDisplay', action='store_const',
                         const=True, default=False, help='Do not display info to std out. Useful for use with nohup command.')
+    parser.add_argument('--printXML', dest='printXML', action='store_const',
+                        const=True, default=False, help='Just dump XML from the monitor(s) to std out. Do not log data.')
+    
     args = parser.parse_args()
 
     # load config
@@ -393,12 +418,10 @@ if __name__ == "__main__":
     print("setting signal handler")
     signal.signal(signal.SIGINT, signalHandler)
 
-    manager = Manager(monitors)        
-
-    print(args.noDisplay)
+    manager = Manager(monitors, args)        
 
     try:
-        manager.run(args.noDisplay)
+        manager.run()
     except:
         manager.stop()
         raise                
