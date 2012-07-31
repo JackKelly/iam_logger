@@ -9,18 +9,6 @@ import argparse
 import threading
 import signal
 
-"""
-TODO: Cope with fact that we can't trust the serial ports; 
-  we probably want to use radioIDs... it'd be nice to
-  find a way to track individual currentCosts though.
-  We should also take advantage of the fact that all 
-  currentCosts record aggregate data. We could merge these together.
-"""
-
-"""
-TODO: handle mappings
-"""
-
 ######################################
 #     GLOBALS                        #
 ######################################
@@ -29,10 +17,12 @@ abort = False # Make this True to halt all threads
 directory = None # The directory to write data to
 
 class TimeInfo(object):
-    """Class for recording simple statistics about time. Useful during IAM testing."""
+    """Class for recording simple statistics about the time each Sensor is updated.
+       Useful for finding IAMs which produce intermittent data."""
     
     strFormat = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'
-    headers   = '{:>7}{:>7}{:>7}{:>7}{:>7}'.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT')
+    strFormatTxt = '{:>7}{:>7}{:>7}{:>7}{:>7}'
+    headers   = strFormatTxt.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT')
     
     def __init__(self):
         self.count    = -1
@@ -62,18 +52,24 @@ class TimeInfo(object):
 
     def __str__(self):
         if self.count < 1:
-            return "     -       -      -      -      {:d}".format(self.count)
+            return TimeInfo.strFormatTxt.format('-','-','-','-',self.count)
         else:
             return TimeInfo.strFormat.format(self.mean, self.max, self.min, self.current, self.count)
 
 
 class Location(object):
+    """Simple struct for representing the 'location' of a sensor where the location
+       means the combination of Current Cost instance and the ccChannel on that CC."""
+    
+       
     def __init__(self, ccChannel, currentCost):
-        self.ccChannel = ccChannel
+        self.ccChannel = ccChannel # ccChannel = Current Cost Channel; to distinguish from 'channel' (which is specified in config file radioIDs.dat)
         self.currentCost = currentCost
+    
         
     def __str__(self):
         return '{} {}'.format(self.currentCost.port, self.ccChannel)
+    
     
     def __repr__(self):
         return 'Location({})'.format(str(self))
@@ -83,6 +79,7 @@ class Location(object):
 #     SENSOR CLASS                  #
 #####################################
 class Sensor(object):
+    """Class for representing physical sensors: Individual Appliance Monitors and CT clamps"""
     
     strFormat = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
     headers   = strFormat.format('LABEL', 'CHAN', 'CCchan', 'WATTS', TimeInfo.headers, 'RADIOID', 'LOCATIONS')
@@ -92,12 +89,14 @@ class Sensor(object):
         self.location  = '-'      
         self.locations = {} # list of all (channel, CurrentCost) this sensor has been seen on
         self.radioID   = radioID # the radioID (unique to this Sensor)
-        self.channel   = channel # the channel number (also unique to this Sensor) taken from config file
+        self.channel   = channel # the channel number (also unique to this Sensor) taken from config file radioIDs.dat
         self.label     = label # human-readable label for this Sensor
         self.watts     = '-'
         self.lastTimecodeWrittenToDisk = None
         
+        
     def update(self, watts, ccChannel, currentCost):
+        """Process a new sample.  We use timestamp from local computer, not from the Current Cost"""
         self.timeInfo.update()
         self.watts = watts
         self.location = Location(ccChannel, currentCost) 
@@ -115,14 +114,16 @@ class Sensor(object):
     
     
     def writeToDisk(self):
-        lastSeen = int(round(self.timeInfo.lastSeen))
+        """Dump a line of data to this Sensor's output file"""
+        timecode = int(round(self.timeInfo.lastSeen))
         
         # First check to see if we've already written this to disk (possibly because multiple current cost monitors hear this sensor)
-        if lastSeen == self.lastTimecodeWrittenToDisk:
-            print("Timecode {} already written to disk.".format(lastSeen), file = sys.stderr)
+        if timecode == self.lastTimecodeWrittenToDisk:
+            print("Timecode {} already written to disk. Label={}, watts={}, location={}".format(
+                   timecode, self.label, self.watts, self.location), file = sys.stderr)
             return
         
-        self.lastTimecodeWrittenToDisk = lastSeen
+        self.lastTimecodeWrittenToDisk = timecode
         
         if self.channel == '-':
             chan = self.radioID
@@ -131,18 +132,19 @@ class Sensor(object):
         
         filename =  directory + "channel_" + str( chan ) + ".dat"
         filehandle = open(filename, 'a+')
-        data = '{:d} {} {}\n'.format(lastSeen, self.watts, self.location)
+        data = '{:d} {} {}\n'.format(timecode, self.watts, self.location)
         filehandle.write( data )
         filehandle.close()
-
 
 
 #####################################
 #     CURRENT COST CLASS            #
 #####################################
 class CurrentCost(threading.Thread):
+    """Represents a physical Current Cost ENVI home energy monitor."""
     
-    sensors = None # Static variable.  A dict of all sensors; keyed by radioID.
+    
+    sensors = {} # Static variable.  A dict of all sensors; keyed by radioID.
 
     def __init__(self, port):
         threading.Thread.__init__(self)
@@ -160,6 +162,7 @@ class CurrentCost(threading.Thread):
 
 
     def _openPort(self):
+        """Open the serial port."""
         if self.serial != None and self.serial.isOpen():
             print("Closing serial port {}\n".format(self.port), file=sys.stderr)
             try:
@@ -181,6 +184,7 @@ class CurrentCost(threading.Thread):
 
 
     def run(self):
+        """This is what the threading framework actually runs."""
         global abort
         try:
             if self.printXML == True: # Just print XML to the screen
@@ -195,7 +199,7 @@ class CurrentCost(threading.Thread):
     
     
     def readLine(self):
-        """Simply read a line from the serial port. Blocking.  On error, print useful message and raise the error."""
+        """Read a line from the serial port.  Blocking.  On error, print useful message and raise the error."""
         try:
             line = self.serial.readline()
         except OSError, e: # catch errors raised by serial.readline
@@ -212,7 +216,7 @@ class CurrentCost(threading.Thread):
 
 
     def resetSerial(self, i, RETRIES):
-        """ Reset the serial port"""            
+        """Reset the serial port"""            
         time.sleep(1) 
         print("retrying... resetSerial number {} of {}\n".format(i, RETRIES), file=sys.stderr)
             
@@ -270,7 +274,7 @@ class CurrentCost(threading.Thread):
         
 
     def _getInfo(self):
-        """Get DSB and version number from Current Cost monitor"""
+        """Get DSB (days since birth) and version number from Current Cost monitor"""
         data = {'dsb': None, 'src': None}
         data           = self.readXML( data )
         self.dsb       = data['dsb'] 
@@ -278,7 +282,7 @@ class CurrentCost(threading.Thread):
         
 
     def update(self):
-        """Read ccChannel data from serial port."""
+        """Read data from serial port."""
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
         data = {'id': None, 'sensor': None, 'ch1/watts': None}
@@ -289,8 +293,7 @@ class CurrentCost(threading.Thread):
         watts     = int( data['ch1/watts'] )
         
         if radioID not in CurrentCost.sensors.keys():
-            print("making new sensors for {}\n".format(radioID),file=sys.stderr)
-            print(CurrentCost.sensors.keys(), file=sys.stderr)
+            print("making new Sensor for radio ID {}".format(radioID),file=sys.stderr)
             CurrentCost.sensors[radioID] = Sensor(radioID) 
         
         CurrentCost.sensors[radioID].update(watts, ccChannel, self)
@@ -324,15 +327,15 @@ class Manager(object):
     """
     
     def __init__(self, currentCosts, args):
-        self.monitors = currentCosts
-        self.args     = args
+        self.currentCosts = currentCosts
+        self.args         = args
         
         
     def run(self):
         # Start each monitor thread
-        for monitor in self.monitors:
-            monitor.printXML = self.args.printXML
-            monitor.start()
+        for currentCost in self.currentCosts:
+            currentCost.printXML = self.args.printXML
+            currentCost.start()
         
         # Use this main thread of control to continually
         # print out info
@@ -343,65 +346,52 @@ class Manager(object):
             while abort == False:
                 os.system('clear')
                 print(str(self))
-                print("\nPress CTRL+C to stop.\n")                
+                print("Press CTRL+C to stop.\n")                
                 time.sleep(1)            
         
         self.stop()
         
 
     def stop(self):
+        """Gracefully attempt to bring the system to a halt."""
         global abort
         abort = True
         
         print("Stopping...")
 
         # Don't exit the main thread until our worker threads have all quit
-        for monitor in self.monitors:
-            print("Waiting for monitor {} to stop...\n".format(monitor.port))
-            monitor.join()
+        for currentCost in self.currentCosts:
+            print("Waiting for monitor {} to stop...".format(currentCost.port))
+            currentCost.join()
             
-        print("Done.\n")
-
-
-#    def checkDuplicateRadioIDs(self):
-#        """
-#        Look across all currentCosts to check for duplicated radioIDs
-#        """
-#        
-#        # make a list of radioIDs
-#        radioIDs = set([])
-#        duplicateRadioIDs = set([])
-#        for monitor in self.monitors:
-#            for sensorNum, sensorData in monitor.sensors.iteritems():
-#                for radioID in sensorData.radioIDs.keys():
-#                    if radioID in radioIDs:
-#                        duplicateRadioIDs = set.union(duplicateRadioIDs, [radioID])
-#                    else:
-#                        radioIDs = set.union(radioIDs, [radioID])
-#                        
-#        if len(duplicateRadioIDs) > 0:
-#            print("\nDuplicate radio IDs: {}\n".format(duplicateRadioIDs))
+        print("Done.")
     
             
     def __str__(self):
         string = ""             
-        for monitor in self.monitors:
-            string += str(monitor)
+        for currentCost in self.currentCosts:
+            string += str(currentCost)
             
         return string
 
+
+def checkForDuplicates(lst, label):
+    """Check for duplicate entries in a list. If duplicates are found then raise an Exception."""
+    duplicates = {}
+    for item in lst:
+        count = lst.count( item )
+        if count > 1 and item not in duplicates.keys():
+            duplicates[item] = count
+            
+    if duplicates: # if duplicates contains any items
+        raise Exception("ERROR in radioIDs.dat. Duplicate {} found: {}\n".format(label, duplicates))        
 
 #########################################
 #      LOAD CONFIG                      #
 #########################################
 
-class SensorLabel(object):
-    def __init__(self, channel, label):
-        self.channel = channel
-        self.label   = label
-        
-
 def loadConfig():
+    """Load config data from config files."""
     configTree    = ET.parse("config.xml") # load config from config file
     global directory
     directory     = configTree.findtext("directory") # File to save data to
@@ -410,25 +400,57 @@ def loadConfig():
     # Start a CurrentCost for each serial port in config.xml
     currentCosts = []
     for serialPort in serialsETree:
-        currentCost    = CurrentCost( serialPort.text )
+        currentCost = CurrentCost( serialPort.text )
         currentCosts.append( currentCost )
-    
-    # Handle mapping from radio IDs to labels and channel numbers
-    sensors = {}
-    
+        
     # Loading radioID mappings
-    radioIDfileHandle = open("radioIDs.dat", "r")
-    lines = radioIDfileHandle.readlines()
-    for line in lines:
-        fields = line.strip().split()
-        if len(fields) == 3:
-            channel, label, radioID = fields
-            radioID = int(radioID)
-            sensors[ radioID ] = Sensor( radioID, channel, label )
-    
-    # Set static variable in Sensor class
-    CurrentCost.sensors = sensors
+    try:
+        radioIDfileHandle = open("radioIDs.dat", "r") # if file doesn't exist then skip the rest of this try block
 
+        # Handle mapping from radio IDs to labels and channel numbers
+        sensors = {}
+    
+        # list of radioIDs to check for duplicates
+        radioIDs = []
+    
+        # list of channels to check for duplicates
+        channels = []
+        
+        # mapping from channel number to label (for creating labels.dat)
+        channelNumMap = {}
+
+        lines = radioIDfileHandle.readlines()
+        for line in lines:
+            partition = line.partition('#') # ignore comments
+            fields = partition[0].strip().split()
+            if len(fields) == 3:
+                channel, label, radioID = fields
+                radioID = int(radioID)
+                sensors[ radioID ] = Sensor( radioID, channel, label )
+                radioIDs.append( radioID )
+                channels.append( channel )
+                channelNumMap[ channel ] = label
+                        
+        checkForDuplicates( radioIDs, 'radioIDs' )
+        checkForDuplicates( channels, 'channels' )
+        
+        # Set static variable in Sensor class
+        CurrentCost.sensors = sensors
+        
+        # write labels.dat file to disk
+        labelsDatHandle = open(directory + 'labels.dat', 'w')
+        chanKeys = channelNumMap.keys()
+        chanKeys.sort()
+        for chanKey in chanKeys:
+            labelsDatHandle.write('{} {}\n'.format(chanKey, channelNumMap[chanKey]))
+        labelsDatHandle.close()
+
+    except IOError, e: # file not found
+        print("radioIDs.dat file not found. Ignoring.", str(e), sep="\n", file=sys.stderr)
+    except Exception, e: # duplicates found        
+        print(str(e))
+        raise
+            
     return currentCosts
 
 
@@ -443,9 +465,9 @@ def signalHandler(signal, frame):
     abort = True
 
 
-########################################
-#  PROCESS COMMAND LINE ARGUMENTS      #
-########################################
+###############################################
+#  PROCESS COMMAND LINE ARGUMENTS AND RUN     #
+###############################################
 
 if __name__ == "__main__":
     # Process command line args
