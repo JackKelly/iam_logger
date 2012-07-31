@@ -2,9 +2,9 @@
 from __future__ import print_function, division
 import serial # for pulling data from Current Cost
 import xml.etree.ElementTree as ET # for XML parsing
-import time # for printing UNIX timecode
-import sys # for printing errors to stderr
-import os # to find names of existing files
+import time
+import sys
+import os
 import argparse
 import threading
 import signal
@@ -28,15 +28,16 @@ class TimeInfo(object):
     """Class for recording simple statistics about the time each Sensor is updated.
        Useful for finding IAMs which produce intermittent data."""
     
-    strFormat = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'
-    strFormatTxt = '{:>7}{:>7}{:>7}{:>7}{:>7}'
-    headers   = strFormatTxt.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT')
+    strFormat = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}' # string for formatting numeric data
+    strFormatTxt = '{:>7}{:>7}{:>7}{:>7}{:>7}' # string for formatting human-readable column headers
+    headers   = strFormatTxt.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT') # column headers
     
     def __init__(self):
         self.count    = -1
-        self.lastSeen = 0
+        self.lastSeen =  0
 
     def update(self):
+        """Get time now. Calculate time since last update.  Use this to update period statistics."""
         unixTime = time.time()
         self.count += 1        
         self.current = unixTime - self.lastSeen
@@ -66,7 +67,7 @@ class TimeInfo(object):
 
 
 class Location(object):
-    """Simple struct for representing the 'location' of a sensor where the location
+    """Simple struct for representing the physical 'location' of a sensor.  The 'location'
        means the combination of Current Cost instance and the ccChannel on that CC."""
     
        
@@ -89,16 +90,16 @@ class Location(object):
 class Sensor(object):
     """Class for representing physical sensors: Individual Appliance Monitors and CT clamps"""
     
-    strFormat = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
-    headers   = strFormat.format('LABEL', 'CHAN', 'CCchan', 'WATTS', TimeInfo.headers, 'RADIOID', 'LOCATIONS')
+    strFormat = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n' # string to format both numeric data and human-readable column headers
+    headers   = strFormat.format('LABEL', 'CHAN', 'CCchan', 'WATTS', TimeInfo.headers, 'RADIOID', 'LOCATIONS') # human-readable column headers
     
     def __init__(self, radioID, channel='-', label='-'):
-        self.timeInfo  = TimeInfo()
-        self.location  = '-'      
-        self.locations = {} # list of all (channel, CurrentCost) this sensor has been seen on
-        self.radioID   = radioID # the radioID (unique to this Sensor)
-        self.channel   = channel # the channel number (also unique to this Sensor) taken from config file radioIDs.dat
-        self.label     = label # human-readable label for this Sensor
+        self.timeInfo  = TimeInfo() # statistics summarising how frequently this Sensor updates.
+        self.location  = '-' # physical location of this Sensor
+        self.locations = {} # list of all physical locations this sensor has been seen on
+        self.radioID   = radioID # this Sensor's radioID (unique to this Sensor)
+        self.channel   = channel # this Sensor's channel number (also unique to this Sensor) taken from config file radioIDs.dat. 'channel' will not exist if there is no radioID entry in radioIDs.dat for this sensor.
+        self.label     = label # human-readable label for this Sensor (taken from radioIDs.dat)
         self.watts     = '-'
         self.lastTimecodeWrittenToDisk = None
         
@@ -192,7 +193,7 @@ class CurrentCost(threading.Thread):
 
 
     def run(self):
-        """This is what the threading framework actually runs."""
+        """This is what the threading framework runs."""
         global abort
         try:
             if self.printXML == True: # Just print XML to the screen
@@ -242,7 +243,9 @@ class CurrentCost(threading.Thread):
         
 
     def readXML(self, data):
-        """Reads a line from the serial port and returns an ElementTree"""
+        """Reads a line from the serial port and returns an ElementTree. 
+           'data' is a dict where the keys are the elements we search for in the XML.
+           'data' is returned with the correct fields filled in from the XML."""
         RETRIES = 10
         for i in range(RETRIES):
             try:
@@ -296,7 +299,7 @@ class CurrentCost(threading.Thread):
         data = {'id': None, 'sensor': None, 'ch1/watts': None}
         
         data      = self.readXML( data )
-        radioID   = int( data['id']        ) # radioID
+        radioID   = int( data['id']        ) # radioID, hopefully unique to an IAM (but not necessarily unique)
         ccChannel = int( data['sensor']    ) # channel on this Current Cost
         watts     = int( data['ch1/watts'] )
         
@@ -341,8 +344,8 @@ class Manager(object):
     """
     
     def __init__(self, currentCosts, args):
-        self.currentCosts = currentCosts
-        self.args         = args
+        self.currentCosts = currentCosts # list of Current Costs
+        self.args         = args # command line arguments
         
         
     def run(self):
@@ -367,13 +370,16 @@ class Manager(object):
         
 
     def stop(self):
-        """Gracefully attempt to bring the system to a halt."""
+        """Gracefully attempt to bring the system to a halt.
+           Specifically we ask every CurrentCost thread to stop by setting 'abort' to True
+           and then we wait patiently for every CurrentCost to return from its last
+           blocked read."""
         global abort
         abort = True
         
         print("Stopping...")
 
-        # Don't exit the main thread until our worker threads have all quit
+        # Don't exit the main thread until our worker CurrentCost threads have all quit
         for currentCost in self.currentCosts:
             print("Waiting for monitor {} to stop...".format(currentCost.port))
             currentCost.join()
@@ -399,6 +405,7 @@ def checkForDuplicates(lst, label):
             
     if duplicates: # if duplicates contains any items
         raise Exception("ERROR in radioIDs.dat. Duplicate {} found: {}\n".format(label, duplicates))        
+
 
 #########################################
 #      LOAD CONFIG                      #
