@@ -9,6 +9,8 @@ import argparse
 import threading
 import signal
 
+# TODO: When in noDisplay mode, write stats summary to a file once a minute.
+
 # TODO: Automatically transfer files from study computer to living room computer for checking; then automatically upload to github once a week.
 
 # TODO: Write a script to check sync between aggregate files on both computers
@@ -418,6 +420,8 @@ def loadConfig():
     # Loading radioID mappings
     try:
         radioIDfileHandle = open("radioIDs.dat", "r") # if file doesn't exist then skip the rest of this try block
+        lines = radioIDfileHandle.readlines()
+        radioIDfileHandle.close()
 
         # Handle mapping from radio IDs to labels and channel numbers
         sensors = {}
@@ -431,7 +435,6 @@ def loadConfig():
         # mapping from channel number to label (for creating labels.dat)
         channelNumMap = {}
 
-        lines = radioIDfileHandle.readlines()
         for line in lines:
             partition = line.partition('#') # ignore comments
             fields = partition[0].strip().split()
