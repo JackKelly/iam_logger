@@ -22,7 +22,7 @@ import signal
 ######################################
 
 abort = False # Make this True to halt all threads
-directory = None # The directory to write data to
+directory = None # The directory to write data to. Set by config.xml
 
 class TimeInfo(object):
     """Class for recording simple statistics about the time each Sensor is updated.
