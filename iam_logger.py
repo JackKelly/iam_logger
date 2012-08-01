@@ -407,15 +407,15 @@ class CurrentCost(threading.Thread):
 class Manager(object):
     """Singleton. Used to manage multiple CurrentCost objects."""
 
-    def __init__(self, currentCosts, args):
-        self.currentCosts = currentCosts # list of Current Costs
+    def __init__(self, current_costs, args):
+        self.current_costs = current_costs # list of Current Costs
         self.args = args # command line arguments
         
     def run(self):
         # Start each monitor thread
-        for currentCost in self.currentCosts:
-            currentCost.print_xml = self.args.print_xml
-            currentCost.start()
+        for current_cost in self.current_costs:
+            current_cost.print_xml = self.args.print_xml
+            current_cost.start()
         
         # Use this main thread of control to continually
         # print out info
@@ -439,9 +439,9 @@ class Manager(object):
     def write_stats_to_file(self):
         print("Press CTRL+C to stop.\n")
         while _abort == False:
-            statsFileHandle = open("stats.dat", "w")            
-            print(str(self), file=statsFileHandle)
-            statsFileHandle.close()
+            stats_file_handle = open("stats.dat", "w")            
+            print(str(self), file=stats_file_handle)
+            stats_file_handle.close()
             time.sleep(60)            
 
     def stop(self):
@@ -459,7 +459,7 @@ class Manager(object):
 
         # Don't exit the main thread until our
         # worker CurrentCost threads have all quit
-        for currentCost in self.currentCosts:
+        for currentCost in self.current_costs:
             print_to_stdout_and_stderr("Waiting for monitor {} to stop..."
                                    .format(currentCost.port))
             currentCost.join()
@@ -468,19 +468,19 @@ class Manager(object):
             
     def __str__(self):
         string = ""             
-        for currentCost in self.currentCosts:
-            string += str(currentCost)
+        for current_cost in self.current_costs:
+            string += str(current_cost)
             
         return string
 
-def check_for_duplicates(lst, label):
+def check_for_duplicates(list_, label):
     """Check for duplicate entries in a list.
     If duplicates are found then raise an Exception.
     
     """
     duplicates = {}
-    for item in lst:
-        count = lst.count(item)
+    for item in list_:
+        count = list_.count(item)
         if count > 1 and item not in duplicates.keys():
             duplicates[item] = count
             
@@ -495,70 +495,69 @@ def check_for_duplicates(lst, label):
 
 def load_config():
     """Load config data from config files."""
-    configTree   = ET.parse("config.xml") # load config from config file
+    config_tree   = ET.parse("config.xml") # load config from config file
     global _directory
-    _directory   = configTree.findtext("directory") # File to save data to
-    serialsETree = configTree.findall("serialport")
+    _directory    = config_tree.findtext("directory") # File to save data to
+    serials_etree = config_tree.findall("serialport")
 
     # Start a CurrentCost for each serial port in config.xml
-    currentCosts = []
-    for serialPort in serialsETree:
-        currentCost = CurrentCost(serialPort.text)
-        currentCosts.append(currentCost)
+    current_costs = []
+    for serial_port in serials_etree:
+        current_costs.append(CurrentCost(serial_port.text))
         
     # Loading radio_id mappings
     try:
-        radioIDfileHandle = open("radioIDs.dat", "r")
+        radio_id_fh = open("radio_ids.dat", "r") # fh = file handle
         # if file doesn't exist then skip the rest of this try block
-        lines = radioIDfileHandle.readlines()
-        radioIDfileHandle.close()
+        lines = radio_id_fh.readlines()
+        radio_id_fh.close()
 
         # Handle mapping from radio IDs to labels and channel numbers
         sensors = {}
     
-        # list of radioIDs to check for duplicates
-        radioIDs = []
+        # list of radio_ids to check for duplicates
+        radio_ids = []
     
         # list of channels to check for duplicates
         channels = []
         
         # mapping from channel number to label (for creating labels.dat)
-        channelNumMap = {}
+        channel_map = {}
 
         for line in lines:
             partition = line.partition('#') # ignore comments
             fields = partition[0].strip().split()
             if len(fields) == 3:
-                channel, label, radioID = fields
-                radioID = int(radioID)
-                sensors[ radioID ] = Sensor(radioID, channel, label)
-                radioIDs.append(radioID)
+                channel, label, radio_id = fields
+                radio_id = int(radio_id)
+                sensors[radio_id] = Sensor(radio_id, channel, label)
+                radio_ids.append(radio_id)
                 channels.append(channel)
-                channelNumMap[channel] = label
+                channel_map[channel] = label
                         
-        check_for_duplicates(radioIDs, 'radioIDs')
+        check_for_duplicates(radio_ids, 'radio_ids')
         check_for_duplicates(channels, 'channels')
         
         # Set static variable in Sensor class
         CurrentCost.sensors = sensors
         
         # write labels.dat file to disk
-        labelsDatHandle = open(_directory + 'labels.dat', 'w')
-        chanKeys = channelNumMap.keys()
-        chanKeys.sort()
-        for chanKey in chanKeys:
-            labelsDatHandle.write('{} {}\n'.format(chanKey, 
-                                                   channelNumMap[chanKey]))
-        labelsDatHandle.close()
+        labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
+        channel_keys = channel_map.keys()
+        channel_keys.sort()
+        for channel_key in channel_keys:
+            labels_fh.write('{} {}\n'.format(channel_key, 
+                                             channel_map[channel_key]))
+        labels_fh.close()
 
     except IOError, e: # file not found
-        print("radioIDs.dat file not found. Ignoring.", str(e),
+        print("radio_ids.dat file not found. Ignoring.", str(e),
               sep="\n", file=sys.stderr)
     except Exception, e: # duplicates found        
         print(str(e))
         raise
             
-    return currentCosts
+    return current_costs
 
 
 #########################################
@@ -566,9 +565,9 @@ def load_config():
 # So we do the right thing with CTRL+C  #
 #########################################
 
-def _signal_handler(signalNumber, frame):
-    signalNames = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
-    print("\nSignal {} received.".format(signalNames[signalNumber]))
+def _signal_handler(signal_number, frame):
+    signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
+    print("\nSignal {} received.".format(signal_names[signal_number]))
     global _abort
     _abort = True
 
@@ -595,14 +594,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # load config
-    currentCosts = load_config()
+    current_costs = load_config()
 
     # register SIGINT handler
     print("setting signal handler")
     signal.signal(signal.SIGINT,  _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)    
 
-    manager = Manager(currentCosts, args)        
+    manager = Manager(current_costs, args)        
 
     try:
         manager.run()
