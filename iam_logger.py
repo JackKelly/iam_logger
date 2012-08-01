@@ -8,6 +8,7 @@ import os
 import argparse
 import threading
 import signal
+import git
 
 # TODO: Order new current cost and some more IAMs (check blog)
 
@@ -34,7 +35,8 @@ import signal
 
 _abort = False # Make this True to halt all threads
 _directory = None # The _directory to write data to. Set by config.xml
-
+_git_update_period = 60 * 60 # in seconds
+_git_condition_variable = threading.Condition()
 
 #==============================================================================
 # UTILITY FUNCTIONS
@@ -59,7 +61,7 @@ def check_for_duplicates(list_, label):
             duplicates[item] = count
             
     if duplicates: # if duplicates contains any items
-        raise IAMLoggerError("ERROR in radioIDs.dat. Duplicate {} found: {}\n"
+        raise IAMLoggerError("ERROR: Duplicate {} found: {}\n"
                         .format(label, duplicates))        
 
 
@@ -70,18 +72,25 @@ def load_config():
     
     For each "serialport" listed in config.xml, init a new CurrentCost.
     
-    Load and process radioIDs.dat.  Check for duplicate radioIDs and channels.
-    
-    Write a _directory/labels.dat file which maps channel number to label
-    as per the original REDD file format.
-    
     Returns:
         a list of initialised CurrentCost objects.
     
     """
     config_tree   = ET.parse("config.xml") # load config from config file
+    
+    # load _directory
     global _directory
     _directory    = config_tree.findtext("directory") # File to save data to
+    if not _directory.endswith('/'):
+        _directory = _directory + '/'
+        
+    # git update frequency
+    global _git_update_period
+    git_update_period = config_tree.findtext("gitupdatefrequency")
+    if git_update_period is not None:
+        _git_update_period = git_update_period
+    
+    # load serialports
     serials_etree = config_tree.findall("serialport")
 
     # Start a CurrentCost for each serial port in config.xml
@@ -89,17 +98,41 @@ def load_config():
     for serial_port in serials_etree:
         current_costs.append(CurrentCost(serial_port.text))
         
-    # Loading radio_id mappings
+    load_radio_id_mapping('radioIDs.dat')
+    load_radio_id_mapping('radioIDs_override.dat', save_labels_dat=False)
+
+    return current_costs
+
+
+def load_radio_id_mapping(filename, save_labels_dat=True):
+    """Loads and processes radioIDs.dat or radioIDs_override.dat.
+    
+    Saves mapping from radio IDs to sensors in CurrentCost.sensors dict.
+    
+    If filename is not found then ignores (after printing an info message
+    to stderr.)
+    
+    Args:
+        filename (str): the filename to load.  e.g. "radioIDs.dat"
+        
+    Kwargs:
+        save_labels_dat (bool): If True then write a _directory/labels.dat
+        file which maps channel number to label as per the original
+        REDD file format.
+
+    Raises:
+        IAMLoggerError: if duplicate channels or radioIDs are found
+    """
+
     try:
-        radio_id_fh = open("radioIDs.dat", "r") # "fh" = file handle
+        radio_id_fh = open(filename, "r") # "fh" = file handle
     except IOError, e: # file not found
-        print("radio_ids.dat file not found. Ignoring.", str(e),
+        print("{} file not found. Ignoring.".format(filename), str(e),
               sep="\n", file=sys.stderr)
     else:
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
 
-        sensors = {} # map radio IDs to Sensors
         radio_ids = [] # used to check for duplicate radio IDs
         channels = [] # used to check for duplicate channel numbers
         channel_map = {} # map channel to label (for creating labels.dat)
@@ -110,31 +143,29 @@ def load_config():
             if len(fields) == 3:
                 channel, label, radio_id = fields
                 radio_id = int(radio_id)
-                sensors[radio_id] = Sensor(radio_id, channel, label)
+                CurrentCost.sensors[radio_id] = Sensor(radio_id, 
+                                                       channel, label)
                 radio_ids.append(radio_id)
                 channels.append(channel)
                 channel_map[channel] = label
 
         try:                        
-            check_for_duplicates(radio_ids, 'radio_ids')
-            check_for_duplicates(channels, 'channels')
+            check_for_duplicates(radio_ids, 'radio_ids in {}'.format(filename))
+            check_for_duplicates(channels, 'channels in {}'.format(filename))
         except IAMLoggerError, e: # duplicates found        
             print(str(e))
             raise
         
-        CurrentCost.sensors = sensors
-        
         # Write labels.dat file to disk
-        labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
-        channel_keys = channel_map.keys()
-        channel_keys.sort()
-        for channel_key in channel_keys:
-            labels_fh.write('{} {}\n'.format(channel_key, 
+        if save_labels_dat:
+            labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
+            channel_keys = channel_map.keys()
+            channel_keys.sort()
+            for channel_key in channel_keys:
+                labels_fh.write('{} {}\n'.format(channel_key, 
                                              channel_map[channel_key]))
-        labels_fh.close()
-
-    return current_costs
-
+            labels_fh.close()
+    
 
 def _signal_handler(signal_number, frame):
     """Handle SIGINT and SIGTERM.
@@ -147,7 +178,18 @@ def _signal_handler(signal_number, frame):
     print("\nSignal {} received.".format(signal_names[signal_number]))
     global _abort
     _abort = True
+    _notify_git()
 
+
+def _notify_git():
+    _git_condition_variable.acquire()
+    _git_condition_variable.notify()
+    _git_condition_variable.release()    
+
+
+def _alarm_handler(signal_number, frame):
+    print("alarm", file=sys.stderr)
+    _notify_git()
 
 #==============================================================================
 # CLASSES
@@ -367,6 +409,35 @@ class Sensor(object):
         data = '{:d} {} {}\n'.format(timecode, self.watts, self.location)
         filehandle.write(data)
         filehandle.close()
+
+
+class _PushToGit(threading.Thread):
+    """Simple little thread for pushing files to git."""
+    
+    def run(self):
+        while True:
+            _git_condition_variable.acquire()
+            _git_condition_variable.wait()
+            
+            if _abort:
+                _git_condition_variable.release()                
+                break
+            
+            self._git_push()
+            signal.alarm(_git_update_period)
+            _git_condition_variable.release()
+            
+    def _git_push(self):
+        """Push to git remote (e.g. github)."""
+    
+        try:
+            repo = git.Repo(_directory)
+            print(repo.git.add('.'), file=sys.stderr)
+            hostname = os.uname()[1]
+            print(repo.git.commit(m=' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
+            print(repo.git.push(), file=sys.stderr)
+        except git.exc.GitCommandError, e:
+            print(str(e), file=sys.stderr)
 
 
 class CurrentCost(threading.Thread):
@@ -690,6 +761,8 @@ class Manager(object):
         global _abort
         _abort = True
         
+        _notify_git()        
+        
         print_to_stdout_and_stderr("Stopping...")
 
         # Don't exit the main thread until our
@@ -707,7 +780,8 @@ class Manager(object):
             string += str(current_cost)
             
         return string
-    
+
+
 #==============================================================================
 # MAIN FUNCTION
 #==============================================================================
@@ -731,12 +805,18 @@ def main():
     args = parser.parse_args()
 
     # load config files and initialise Current Costs
-    current_costs = load_config()
-
+    current_costs = load_config()    
+    
     # register SIGINT and SIGTERM handler
-    print("setting signal handler")
+    print("setting signal handlers")
     signal.signal(signal.SIGINT,  _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)    
+    signal.signal(signal.SIGTERM, _signal_handler) 
+    signal.signal(signal.SIGALRM, _alarm_handler)
+
+    # start git push
+    git_push = _PushToGit()
+    git_push.start()
+    signal.alarm(_git_update_period)
 
     # initialise and run Manager
     manager = Manager(current_costs, args)        

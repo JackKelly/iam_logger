@@ -6,3 +6,4 @@ data/
 nohup.out
 stats.dat
 *.pyc
+radioIDs_override.dat
