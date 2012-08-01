@@ -25,7 +25,7 @@ import signal
 #=============================================================================
 # Utility functions
 #=============================================================================
-def printToStdoutAndStderr(msg):
+def print_to_stdout_and_stderr(msg):
     print(msg)
     print(msg, file=sys.stderr)
     
@@ -162,7 +162,7 @@ class Sensor(object):
         else:
             self.locations[ str(self.location) ]  = 0
         
-        self.writeToDisk()
+        self.write_to_disk()
 
     def __str__(self):
         return Sensor.strFormat.format(self.label, self.channel,
@@ -170,7 +170,7 @@ class Sensor(object):
                                        self.timeInfo, self.radioID, 
                                        self.locations) 
 
-    def writeToDisk(self):
+    def write_to_disk(self):
         """Dump a line of data to this Sensor's output file."""
         timecode = int(round(self.timeInfo.lastSeen))
         
@@ -211,15 +211,15 @@ class CurrentCost(threading.Thread):
             self.printXML = False # Should we be in "printXML" mode?
             self.port = port # Serial port e.g. "/dev/ttyUSB0"
             self.serial = None # A serial.Serial object
-            self._openPort()
-            self._getInfo()
+            self._open_port()
+            self._get_info()
             self.localSensors = {} # Dict of references to Sensors
             # on this CurrentCost; keyed by ccChannel
         except (OSError, serial.SerialException):
             _abort = True
             raise
 
-    def _openPort(self):
+    def _open_port(self):
         """Open the serial port."""
         if self.serial != None and self.serial.isOpen():
             print("Closing serial port {}\n".format(self.port),
@@ -251,7 +251,7 @@ class CurrentCost(threading.Thread):
         try:
             if self.printXML == True: # Just print XML to the screen
                 while _abort == False:
-                    print(str(self.port), self.readLine(), sep="\n")
+                    print(str(self.port), self.readline(), sep="\n")
             else:            
                 while _abort == False:
                     self.update()
@@ -259,7 +259,7 @@ class CurrentCost(threading.Thread):
             _abort = True
             raise
     
-    def readLine(self):
+    def readline(self):
         """Read a line from the serial port.  Blocking.
         On error, print useful message and raise the error.
         
@@ -282,10 +282,10 @@ class CurrentCost(threading.Thread):
         
         return line
 
-    def resetSerial(self, i, RETRIES):
+    def reset_serial(self, i, RETRIES):
         """Reset the serial port."""            
         time.sleep(1) 
-        print("retrying... resetSerial number {} of {}\n"
+        print("retrying... reset_serial number {} of {}\n"
               .format(i, RETRIES), file=sys.stderr)
             
         # Try to flush the serial port.
@@ -296,7 +296,7 @@ class CurrentCost(threading.Thread):
             
         # Try to re-open the port.
         try:
-            self._openPort()
+            self._open_port()
         except: # Ignore errors.  We're going to retry anyway.
             pass
         
@@ -309,7 +309,7 @@ class CurrentCost(threading.Thread):
         RETRIES = 10
         for i in range(RETRIES):
             try:
-                line = self.readLine()
+                line = self.readline()
                 tree = ET.XML(line)
                 
                 # Check if this is histogram data from the current cost
@@ -336,20 +336,20 @@ class CurrentCost(threading.Thread):
                     continue
                 
             except (OSError, serial.SerialException, ValueError): 
-                # raised by readLine()
-                self.resetSerial(i, RETRIES)
+                # raised by readline()
+                self.reset_serial(i, RETRIES)
             except ET.ParseError, e: 
                 # Catch XML errors (occasionally the current cost 
                 # outputs malformed XML)
                 print("XML error: ", str(e), line, sep="\n", file=sys.stderr)
-                self.resetSerial(i, RETRIES)
+                self.reset_serial(i, RETRIES)
         
         # If we get to here then we have failed after every retry    
         global _abort
         _abort = True
         raise Exception("readXML failed after {} retries".format(RETRIES))
 
-    def _getInfo(self):
+    def _get_info(self):
         """Get DSB (days since birth) and version
         number from Current Cost monitor.
         
@@ -423,20 +423,20 @@ class Manager(object):
             print("Press CTRL+C to stop.\n")
             signal.pause() # Note: signal.pause can't be used on Windows!
         elif self.args.noDisplay:
-            self.writeStatsToFile()                
+            self.write_stats_to_file()                
         else:
-            self.writeStatsToScreen()
+            self.write_stats_to_screen()
         
         self.stop()
 
-    def writeStatsToScreen(self):
+    def write_stats_to_screen(self):
         while _abort == False:
             os.system('clear')
             print(str(self))
             print("Press CTRL+C to stop.\n")                
             time.sleep(1)            
 
-    def writeStatsToFile(self):
+    def write_stats_to_file(self):
         print("Press CTRL+C to stop.\n")
         while _abort == False:
             statsFileHandle = open("stats.dat", "w")            
@@ -455,16 +455,16 @@ class Manager(object):
         global _abort
         _abort = True
         
-        printToStdoutAndStderr("Stopping...")
+        print_to_stdout_and_stderr("Stopping...")
 
         # Don't exit the main thread until our
         # worker CurrentCost threads have all quit
         for currentCost in self.currentCosts:
-            printToStdoutAndStderr("Waiting for monitor {} to stop..."
+            print_to_stdout_and_stderr("Waiting for monitor {} to stop..."
                                    .format(currentCost.port))
             currentCost.join()
             
-        printToStdoutAndStderr("Done.")
+        print_to_stdout_and_stderr("Done.")
             
     def __str__(self):
         string = ""             
@@ -473,7 +473,7 @@ class Manager(object):
             
         return string
 
-def checkForDuplicates(lst, label):
+def check_for_duplicates(lst, label):
     """Check for duplicate entries in a list.
     If duplicates are found then raise an Exception.
     
@@ -493,7 +493,7 @@ def checkForDuplicates(lst, label):
 #      LOAD CONFIG                      #
 #########################################
 
-def loadConfig():
+def load_config():
     """Load config data from config files."""
     configTree   = ET.parse("config.xml") # load config from config file
     global _directory
@@ -536,8 +536,8 @@ def loadConfig():
                 channels.append(channel)
                 channelNumMap[channel] = label
                         
-        checkForDuplicates(radioIDs, 'radioIDs')
-        checkForDuplicates(channels, 'channels')
+        check_for_duplicates(radioIDs, 'radioIDs')
+        check_for_duplicates(channels, 'channels')
         
         # Set static variable in Sensor class
         CurrentCost.sensors = sensors
@@ -566,7 +566,7 @@ def loadConfig():
 # So we do the right thing with CTRL+C  #
 #########################################
 
-def signalHandler(signalNumber, frame):
+def _signal_handler(signalNumber, frame):
     signalNames = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
     print("\nSignal {} received.".format(signalNames[signalNumber]))
     global _abort
@@ -595,12 +595,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # load config
-    currentCosts = loadConfig()
+    currentCosts = load_config()
 
     # register SIGINT handler
     print("setting signal handler")
-    signal.signal(signal.SIGINT,  signalHandler)
-    signal.signal(signal.SIGTERM, signalHandler)    
+    signal.signal(signal.SIGINT,  _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)    
 
     manager = Manager(currentCosts, args)        
 
