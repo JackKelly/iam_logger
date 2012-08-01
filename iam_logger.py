@@ -130,32 +130,32 @@ class Sensor(object):
     HEADERS = STR_FORMAT.format('LABEL', 'CHAN', 'CCchan', 'WATTS',
                                 TimeInfo.HEADERS, 'RADIOID', 'LOCATIONS') 
     
-    def __init__(self, radioID, channel='-', label='-'):
+    def __init__(self, radio_id, channel='-', label='-'):
         # statistics summarising how frequently this Sensor updates:
         self.time_info = TimeInfo()
         # physical location of this Sensor: 
         self.location = '-'
         # list of all physical locations this sensor has been seen on: 
         self.locations = {} 
-        # this Sensor's radioID (unique to this Sensor):
-        self.radioID = radioID 
+        # this Sensor's radio_id (unique to this Sensor):
+        self.radio_id = radio_id 
         # this Sensor's channel number (also unique to this Sensor)
         # taken from config file radioIDs.dat. 'channel' will not exist
-        # if there is no radioID entry in radioIDs.dat for this sensor:
+        # if there is no radio_id entry in radioIDs.dat for this sensor:
         self.channel = channel
         # human-readable label for this Sensor (taken from radioIDs.dat): 
         self.label = label
         self.watts = '-'
-        self.lastTimecodeWrittenToDisk = None
+        self.last_timecode_written_to_disk = None
 
-    def update(self, watts, ccChannel, currentCost):
+    def update(self, watts, cc_channel, current_cost):
         """Process a new sample.
         We use timestamp from local computer, not from the Current Cost.
         
         """
         self.time_info.update()
         self.watts = watts
-        self.location = Location(ccChannel, currentCost) 
+        self.location = Location(cc_channel, current_cost) 
         
         if str(self.location) in self.locations.keys():
             self.locations[ str(self.location) ] += 1
@@ -167,7 +167,7 @@ class Sensor(object):
     def __str__(self):
         return Sensor.STR_FORMAT.format(self.label, self.channel,
                                        self.location.cc_channel, self.watts, 
-                                       self.time_info, self.radioID, 
+                                       self.time_info, self.radio_id, 
                                        self.locations) 
 
     def write_to_disk(self):
@@ -176,16 +176,16 @@ class Sensor(object):
         
         # First check to see if we've already written this to disk 
         # (possibly because multiple current cost monitors hear this sensor)
-        if timecode == self.lastTimecodeWrittenToDisk:
+        if timecode == self.last_timecode_written_to_disk:
             print("Timecode {} already written to disk. Label={}, watts={}, "
                   "location={}".format(timecode, self.label, self.watts,
                                         self.location), file = sys.stderr)
             return
         
-        self.lastTimecodeWrittenToDisk = timecode
+        self.last_timecode_written_to_disk = timecode
         
         if self.channel == '-':
-            chan = self.radioID
+            chan = self.radio_id
         else:
             chan = self.channel
         
@@ -202,18 +202,18 @@ class Sensor(object):
 class CurrentCost(threading.Thread):
     """Represents a physical Current Cost ENVI home energy monitor."""
 
-    sensors = {} # Static variable.  A dict of all sensors; keyed by radioID.
+    sensors = {} # Static variable.  A dict of all sensors; keyed by radio_id.
 
     def __init__(self, port):
         threading.Thread.__init__(self)
         global _abort        
         try:
-            self.printXML = False # Should we be in "printXML" mode?
+            self.print_xml = False # Should we be in "print_xml" mode?
             self.port = port # Serial port e.g. "/dev/ttyUSB0"
             self.serial = None # A serial.Serial object
             self._open_port()
             self._get_info()
-            self.localSensors = {} # Dict of references to Sensors
+            self.local_sensors = {} # Dict of references to Sensors
             # on this CurrentCost; keyed by cc_channel
         except (OSError, serial.SerialException):
             _abort = True
@@ -249,7 +249,7 @@ class CurrentCost(threading.Thread):
         """This is what the threading framework runs."""
         global _abort
         try:
-            if self.printXML == True: # Just print XML to the screen
+            if self.print_xml == True: # Just print XML to the screen
                 while _abort == False:
                     print(str(self.port), self.readline(), sep="\n")
             else:            
@@ -282,11 +282,11 @@ class CurrentCost(threading.Thread):
         
         return line
 
-    def reset_serial(self, i, RETRIES):
+    def reset_serial(self, i, retries):
         """Reset the serial port."""            
         time.sleep(1) 
         print("retrying... reset_serial number {} of {}\n"
-              .format(i, RETRIES), file=sys.stderr)
+              .format(i, retries), file=sys.stderr)
             
         # Try to flush the serial port.
         try:
@@ -300,7 +300,7 @@ class CurrentCost(threading.Thread):
         except: # Ignore errors.  We're going to retry anyway.
             pass
         
-    def readXML(self, data):
+    def read_xml(self, data):
         """Reads a line from the serial port and returns an ElementTree. 
         'data' is a dict. The keys = the elements we search for in the XML.
         'data' is returned with the correct fields filled in from the XML.
@@ -347,56 +347,56 @@ class CurrentCost(threading.Thread):
         # If we get to here then we have failed after every retry    
         global _abort
         _abort = True
-        raise Exception("readXML failed after {} retries".format(RETRIES))
+        raise Exception("read_xml failed after {} retries".format(RETRIES))
 
     def _get_info(self):
         """Get DSB (days since birth) and version
         number from Current Cost monitor.
         
         """
-        data           = self.readXML({'dsb': None, 'src': None})
-        self.dsb       = data['dsb'] 
-        self.ccVersion = data['src']
+        data            = self.read_xml({'dsb': None, 'src': None})
+        self.dsb        = data['dsb'] 
+        self.cc_version = data['src']
 
     def update(self):
         """Read data from serial port."""
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
         data = {'id': None, 'sensor': None, 'ch1/watts': None}
-        data = self.readXML(data)
-        # radioID, hopefully unique to an IAM (but not necessarily unique):
-        radioID   = int(data['id'])
-        ccChannel = int(data['sensor']) # channel on this Current Cost
-        watts     = int(data['ch1/watts'])
+        data = self.read_xml(data)
+        # radio_id, hopefully unique to an IAM (but not necessarily unique):
+        radio_id   = int(data['id'])
+        cc_channel = int(data['sensor']) # channel on this Current Cost
+        watts      = int(data['ch1/watts'])
         
         lock = threading.Lock()
         
-        if radioID not in CurrentCost.sensors.keys():
+        if radio_id not in CurrentCost.sensors.keys():
             print("making new Sensor for radio ID {}"
-                  .format(radioID),file=sys.stderr)
+                  .format(radio_id),file=sys.stderr)
             lock.acquire()
-            CurrentCost.sensors[radioID] = Sensor(radioID)
+            CurrentCost.sensors[radio_id] = Sensor(radio_id)
             lock.release()
         
         lock.acquire()
-        CurrentCost.sensors[radioID].update(watts, ccChannel, self)
+        CurrentCost.sensors[radio_id].update(watts, cc_channel, self)
         lock.release()
         
         # Maintain a local dict of sensors connected to this current cost
-        self.localSensors[ccChannel] = CurrentCost.sensors[radioID]
+        self.local_sensors[cc_channel] = CurrentCost.sensors[radio_id]
 
     def __str__(self):
         string  = "port      = {}\n".format(self.port)        
         string += "DSB       = {}\n".format(self.dsb)
-        string += "Version   = {}\n\n".format(self.ccVersion)    
+        string += "Version   = {}\n\n".format(self.cc_version)    
         string += " "*41 + "|---PERIOD STATS (secs)---|\n"
         string += Sensor.HEADERS
         
-        ccChannels = self.localSensors.keys() # keyed by channel number
-        ccChannels.sort()
+        cc_channels = self.local_sensors.keys() # keyed by channel number
+        cc_channels.sort()
         
-        for ccChannel in ccChannels:
-            sensor  = self.localSensors[ccChannel]
+        for cc_channel in cc_channels:
+            sensor  = self.local_sensors[cc_channel]
             string += str(sensor)        
         
         string += "\n\n"
@@ -414,12 +414,12 @@ class Manager(object):
     def run(self):
         # Start each monitor thread
         for currentCost in self.currentCosts:
-            currentCost.printXML = self.args.printXML
+            currentCost.print_xml = self.args.print_xml
             currentCost.start()
         
         # Use this main thread of control to continually
         # print out info
-        if self.args.printXML:
+        if self.args.print_xml:
             print("Press CTRL+C to stop.\n")
             signal.pause() # Note: signal.pause can't be used on Windows!
         elif self.args.noDisplay:
@@ -506,7 +506,7 @@ def load_config():
         currentCost = CurrentCost(serialPort.text)
         currentCosts.append(currentCost)
         
-    # Loading radioID mappings
+    # Loading radio_id mappings
     try:
         radioIDfileHandle = open("radioIDs.dat", "r")
         # if file doesn't exist then skip the rest of this try block
@@ -587,7 +587,7 @@ if __name__ == "__main__":
                         help='Do not display info to std out. ' 
                         'Useful for use with nohup command.')
     
-    parser.add_argument('--printXML', dest='printXML', action='store_const',
+    parser.add_argument('--print_xml', dest='print_xml', action='store_const',
                         const=True, default=False, help='Just dump XML from '
                         'the monitor(s) to std out. Do not log data. '
                         '(May not work on Windows)')
