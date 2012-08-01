@@ -37,6 +37,13 @@ def print_to_stdout_and_stderr(msg):
 _abort = False # Make this True to halt all threads
 _directory = None # The _directory to write data to. Set by config.xml
 
+######################################
+#     TimeInfo class                 #
+######################################
+
+class IAMLoggerError(Exception):
+    """Base class for errors in iam_logger."""
+
 
 ######################################
 #     TimeInfo class                 #
@@ -221,12 +228,12 @@ class CurrentCost(threading.Thread):
 
     def _open_port(self):
         """Open the serial port."""
-        if self.serial != None and self.serial.isOpen():
+        if self.serial is not None and self.serial.isOpen():
             print("Closing serial port {}\n".format(self.port),
                    file=sys.stderr)
             try:
                 self.serial.close()
-            except:
+            except Exception:
                 pass
          
         print("Opening serial port ", self.port, file=sys.stderr)
@@ -255,7 +262,7 @@ class CurrentCost(threading.Thread):
             else:            
                 while _abort == False:
                     self.update()
-        except:
+        except Exception:
             _abort = True
             raise
     
@@ -291,13 +298,13 @@ class CurrentCost(threading.Thread):
         # Try to flush the serial port.
         try:
             self.serial.flushInput()
-        except: # Ignore errors.  We're going to retry anyway.
+        except Exception: # Ignore errors.  We're going to retry anyway.
             pass
             
         # Try to re-open the port.
         try:
             self._open_port()
-        except: # Ignore errors.  We're going to retry anyway.
+        except Exception: # Ignore errors.  We're going to retry anyway.
             pass
         
     def read_xml(self, data):
@@ -317,14 +324,14 @@ class CurrentCost(threading.Thread):
                 # (This could also be done by checking the size of 'line' 
                 # - this would probably be faster although
                 #  possibly the size of a "histogram" is variable)
-                if tree.findtext('hist') != None:
+                if tree.findtext('hist') is not None:
                     continue
                 
                 # Check if all the elements we're looking for exist in this XML
                 success = True
                 for key in data.keys():
                     data[key] = tree.findtext(key)
-                    if data[key] == None:
+                    if data[key] is None:
                         success = False
                         print("Key \'{}\' not found in XML:\n{}"
                               .format(key, line), file=sys.stderr)
@@ -341,13 +348,13 @@ class CurrentCost(threading.Thread):
             except ET.ParseError, e: 
                 # Catch XML errors (occasionally the current cost 
                 # outputs malformed XML)
-                print("XML error: ", str(e), line, sep="\n", file=sys.stderr)
+                print('XML error: ', str(e), line, sep='\n', file=sys.stderr)
                 self.reset_serial(i, RETRIES)
         
         # If we get to here then we have failed after every retry    
         global _abort
         _abort = True
-        raise Exception("read_xml failed after {} retries".format(RETRIES))
+        raise IAMLoggerError('read_xml failed after {} retries'.format(RETRIES))
 
     def _get_info(self):
         """Get DSB (days since birth) and version
@@ -485,7 +492,7 @@ def check_for_duplicates(list_, label):
             duplicates[item] = count
             
     if duplicates: # if duplicates contains any items
-        raise Exception("ERROR in radioIDs.dat. Duplicate {} found: {}\n"
+        raise IAMLoggerError("ERROR in radioIDs.dat. Duplicate {} found: {}\n"
                         .format(label, duplicates))        
 
 
@@ -507,7 +514,7 @@ def load_config():
         
     # Loading radio_id mappings
     try:
-        radio_id_fh = open("radio_ids.dat", "r") # fh = file handle
+        radio_id_fh = open("radioIDs.dat", "r") # fh = file handle
         # if file doesn't exist then skip the rest of this try block
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
@@ -553,7 +560,7 @@ def load_config():
     except IOError, e: # file not found
         print("radio_ids.dat file not found. Ignoring.", str(e),
               sep="\n", file=sys.stderr)
-    except Exception, e: # duplicates found        
+    except IAMLoggerError, e: # duplicates found        
         print(str(e))
         raise
             
@@ -605,6 +612,6 @@ if __name__ == "__main__":
 
     try:
         manager.run()
-    except:
+    except Exception:
         manager.stop()
         raise                
