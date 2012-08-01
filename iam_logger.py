@@ -50,24 +50,24 @@ class TimeInfo(object):
     """
     
     # string for formatting numeric data:
-    strFormat = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'
-    # string for formatting human-readable column headers: 
-    strFormatTxt = '{:>7}{:>7}{:>7}{:>7}{:>7}' 
-    # column headers:
-    headers   = strFormatTxt.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT') 
+    STR_FORMAT = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'
+    # string for formatting human-readable column HEADERS: 
+    STR_FORMAT_TXT = '{:>7}{:>7}{:>7}{:>7}{:>7}' 
+    # column HEADERS:
+    HEADERS = STR_FORMAT_TXT.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT') 
     
     def __init__(self):
-        self.count    = -1
-        self.lastSeen =  0
+        self.count = -1
+        self.last_seen =  0
 
     def update(self):
         """Get time now. Calculate time since last update.  
         Use this to update period statistics.
            
         """
-        unixTime = time.time()
+        unix_time = time.time()
         self.count += 1        
-        self.current = unixTime - self.lastSeen
+        self.current = unix_time - self.last_seen
         
         if self.count == 0: # this is the first time we've run
             self.current = None
@@ -84,13 +84,13 @@ class TimeInfo(object):
             if self.current > self.max: self.max = self.current
             if self.current < self.min: self.min = self.current
             
-        self.lastSeen = unixTime
+        self.last_seen = unix_time
 
     def __str__(self):
         if self.count < 1:
-            return TimeInfo.strFormatTxt.format('-','-','-','-',self.count)
+            return TimeInfo.STR_FORMAT_TXT.format('-','-','-','-',self.count)
         else:
-            return TimeInfo.strFormat.format(self.mean, self.max, 
+            return TimeInfo.STR_FORMAT.format(self.mean, self.max, 
                                              self.min, self.current, 
                                              self.count)
 
@@ -98,18 +98,18 @@ class TimeInfo(object):
 class Location(object):
     """Simple struct for representing the physical 'location' of a sensor.
     The 'location'  means the combination of Current Cost instance and 
-    the ccChannel on that CC.
+    the cc_channel on that CC.
     
     """
        
-    def __init__(self, ccChannel, currentCost):
-        # ccChannel = Current Cost Channel; to distinguish from 
+    def __init__(self, cc_channel, current_cost):
+        # cc_channel = Current Cost Channel; to distinguish from 
         # 'channel' (which is specified in config file radioIDs.dat):
-        self.ccChannel = ccChannel 
-        self.currentCost = currentCost
+        self.cc_channel = cc_channel 
+        self.current_cost = current_cost
 
     def __str__(self):
-        return '{} {}'.format(self.currentCost.port, self.ccChannel)
+        return '{} {}'.format(self.current_cost.port, self.cc_channel)
     
     def __repr__(self):
         return 'Location({})'.format(str(self))
@@ -124,15 +124,15 @@ class Sensor(object):
 
     """
     
-    # string to format both numeric data and human-readable column headers:
-    strFormat = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
-    # human-readable column headers:
-    headers   = strFormat.format('LABEL', 'CHAN', 'CCchan', 'WATTS',
-                                  TimeInfo.headers, 'RADIOID', 'LOCATIONS') 
+    # string to format both numeric data and human-readable column HEADERS:
+    STR_FORMAT = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
+    # human-readable column HEADERS:
+    HEADERS = STR_FORMAT.format('LABEL', 'CHAN', 'CCchan', 'WATTS',
+                                TimeInfo.HEADERS, 'RADIOID', 'LOCATIONS') 
     
     def __init__(self, radioID, channel='-', label='-'):
         # statistics summarising how frequently this Sensor updates:
-        self.timeInfo = TimeInfo()
+        self.time_info = TimeInfo()
         # physical location of this Sensor: 
         self.location = '-'
         # list of all physical locations this sensor has been seen on: 
@@ -153,7 +153,7 @@ class Sensor(object):
         We use timestamp from local computer, not from the Current Cost.
         
         """
-        self.timeInfo.update()
+        self.time_info.update()
         self.watts = watts
         self.location = Location(ccChannel, currentCost) 
         
@@ -165,14 +165,14 @@ class Sensor(object):
         self.write_to_disk()
 
     def __str__(self):
-        return Sensor.strFormat.format(self.label, self.channel,
-                                       self.location.ccChannel, self.watts, 
-                                       self.timeInfo, self.radioID, 
+        return Sensor.STR_FORMAT.format(self.label, self.channel,
+                                       self.location.cc_channel, self.watts, 
+                                       self.time_info, self.radioID, 
                                        self.locations) 
 
     def write_to_disk(self):
         """Dump a line of data to this Sensor's output file."""
-        timecode = int(round(self.timeInfo.lastSeen))
+        timecode = int(round(self.time_info.last_seen))
         
         # First check to see if we've already written this to disk 
         # (possibly because multiple current cost monitors hear this sensor)
@@ -214,7 +214,7 @@ class CurrentCost(threading.Thread):
             self._open_port()
             self._get_info()
             self.localSensors = {} # Dict of references to Sensors
-            # on this CurrentCost; keyed by ccChannel
+            # on this CurrentCost; keyed by cc_channel
         except (OSError, serial.SerialException):
             _abort = True
             raise
@@ -390,7 +390,7 @@ class CurrentCost(threading.Thread):
         string += "DSB       = {}\n".format(self.dsb)
         string += "Version   = {}\n\n".format(self.ccVersion)    
         string += " "*41 + "|---PERIOD STATS (secs)---|\n"
-        string += Sensor.headers
+        string += Sensor.HEADERS
         
         ccChannels = self.localSensors.keys() # keyed by channel number
         ccChannels.sort()
