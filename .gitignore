@@ -5,3 +5,4 @@ errors.txt
 data/
 nohup.out
 stats.dat
+*.pyc

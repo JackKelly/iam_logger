@@ -9,7 +9,7 @@ import argparse
 import threading
 import signal
 
-# TODO: Order new current cost and some more IAMs (check blog)
+# TODO: Order new _current cost and some more IAMs (check blog)
 
 # TODO: When in noDisplay mode, write stats summary to a file once a minute.
 
@@ -22,49 +22,52 @@ import signal
 
 # TODO: Get old laptop running in office for logging.
 
-#=============================================================================
-# Utility functions
-#=============================================================================
-def print_to_stdout_and_stderr(msg):
-    print(msg)
-    print(msg, file=sys.stderr)
-    
 
-######################################
-#     GLOBALS                        #
-######################################
+#==============================================================================
+# GLOBALS
+#==============================================================================
 
 _abort = False # Make this True to halt all threads
 _directory = None # The _directory to write data to. Set by config.xml
 
-######################################
-#     TimeInfo class                 #
-######################################
+
+#==============================================================================
+# UTILITY FUNCTIONS
+#==============================================================================
+
+def print_to_stdout_and_stderr(msg):
+    print(msg)
+    print(msg, file=sys.stderr)
+
+#==============================================================================
+# CLASSES
+#==============================================================================
 
 class IAMLoggerError(Exception):
     """Base class for errors in iam_logger."""
 
 
-######################################
-#     TimeInfo class                 #
-######################################
-
-class TimeInfo(object):
-    """Class for recording simple statistics about
-    the time each Sensor is updated.
+class TimeInfo(object):    
+    """Record simple statistics about the time each Sensor is updated.
+    
     Useful for finding IAMs which produce intermittent data.
+    
+    Static attributes:
+            
+        - HEADERS (str): column headers
+    
+    Attributes:
+    
+        - last_seen (float): Unix timecode.
     
     """
     
-    # string for formatting numeric data:
-    STR_FORMAT = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'
-    # string for formatting human-readable column HEADERS: 
-    STR_FORMAT_TXT = '{:>7}{:>7}{:>7}{:>7}{:>7}' 
-    # column HEADERS:
-    HEADERS = STR_FORMAT_TXT.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT') 
+    _STR_FORMAT = '{:>7.2f}{:>7.1f}{:>7.1f}{:>7.1f}{:>7d}'
+    _STR_FORMAT_TXT = '{:>7}{:>7}{:>7}{:>7}{:>7}' 
+    HEADERS = _STR_FORMAT_TXT.format('MEAN', 'MAX', 'MIN', 'LAST', 'COUNT') 
     
     def __init__(self):
-        self.count = -1
+        self._count = -1
         self.last_seen =  0
 
     def update(self):
@@ -73,46 +76,57 @@ class TimeInfo(object):
            
         """
         unix_time = time.time()
-        self.count += 1        
-        self.current = unix_time - self.last_seen
+        self._count += 1        
+        self._current = unix_time - self.last_seen
         
-        if self.count == 0: # this is the first time we've run
-            self.current = None
-            self.mean = None
-            self.max  = None
-            self.min  = None
-        elif self.count == 1:
-            self.mean = self.current
-            self.max  = self.current
-            self.min  = self.current
+        if self._count == 0: # this is the first time we've run
+            self._current = None
+            self._mean = None
+            self._max  = None
+            self._min  = None
+        elif self._count == 1:
+            self._mean = self._current
+            self._max  = self._current
+            self._min  = self._current
         else:
-            self.mean = (((float(self.mean) * (self.count - 1)) + self.current) 
-                         / self.count)
-            if self.current > self.max: self.max = self.current
-            if self.current < self.min: self.min = self.current
+            self._mean = (((float(self._mean) * (self._count - 1)) + self._current) 
+                         / self._count)
+            if self._current > self._max: self._max = self._current
+            if self._current < self._min: self._min = self._current
             
         self.last_seen = unix_time
 
     def __str__(self):
-        if self.count < 1:
-            return TimeInfo.STR_FORMAT_TXT.format('-','-','-','-',self.count)
+        if self._count < 1:
+            return TimeInfo._STR_FORMAT_TXT.format('-','-','-','-',self._count)
         else:
-            return TimeInfo.STR_FORMAT.format(self.mean, self.max, 
-                                             self.min, self.current, 
-                                             self.count)
+            return TimeInfo._STR_FORMAT.format(self._mean, self._max, 
+                                             self._min, self._current, 
+                                             self._count)
 
 
 class Location(object):
     """Simple struct for representing the physical 'location' of a sensor.
+    
     The 'location'  means the combination of Current Cost instance and 
     the cc_channel on that CC.
     
+    Attributes:
+        cc_channel (int): Current Cost channel.
+        
+        current_cost (CurrentCost): a CurrentCost object.
     """
        
     def __init__(self, cc_channel, current_cost):
-        # cc_channel = Current Cost Channel; to distinguish from 
-        # 'channel' (which is specified in config file radioIDs.dat):
-        self.cc_channel = cc_channel 
+        """Construct a Location object.
+        
+        Args:
+            cc_channel (int): Current Cost channel.
+            current_cost (CurrentCost): a CurrentCost object
+        
+        """
+        
+        self.cc_channel = cc_channel         
         self.current_cost = current_cost
 
     def __str__(self):
@@ -126,38 +140,82 @@ class Location(object):
 #     SENSOR CLASS                  #
 #####################################
 class Sensor(object):
-    """Class for representing physical sensors: 
-    Individual Appliance Monitors and CT clamps.
+    """Represent physical sensors: IAMs and CT clamps.
+    
+    Static attributes:
 
+        HEADERS (str): human-readable column HEADERS:  
+    
+    Attributes:
+        time_info (TimeInfo): statistics describing how frequently this
+            sensor is updated.
+            
+        location (Location): the physical location of this Sensor.
+        
+        locations (list): every Location this sensor has been observed
+            since this instance of iam_logger started running.
+        
+        radio_id (int): the radio ID used to identify this Sensor. Radio IDs
+            *should* be unique to this Sensor but the Current Cost IAMs
+            have no way to enforce uniqueness so conflicts can occur.
+            (At startup, the load_config function checks for conflicting 
+            radio IDs in the radioID.dat file.)
+            
+        channel (str): this Sensor's channel number (unique to this Sensor)
+            taken from config file radioIDs.dat. 'channel' will not exist
+            if there is no radio_id entry in radioIDs.dat for this sensor.
+            
+        label (str): human-readable label for this Sensor
+            (taken from radioIDs.dat).
+            
+        watts (int): instantaneous power measured in watts.
+    
     """
     
     # string to format both numeric data and human-readable column HEADERS:
-    STR_FORMAT = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
-    # human-readable column HEADERS:
-    HEADERS = STR_FORMAT.format('LABEL', 'CHAN', 'CCchan', 'WATTS',
+    _STR_FORMAT = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
+    HEADERS = _STR_FORMAT.format('LABEL', 'CHAN', 'CCchan', 'WATTS',
                                 TimeInfo.HEADERS, 'RADIOID', 'LOCATIONS') 
     
     def __init__(self, radio_id, channel='-', label='-'):
-        # statistics summarising how frequently this Sensor updates:
+        """Construct a Sensor.
+        
+        Args:
+        
+            radio_id (int): the radio ID unique to this physical sensor.
+            
+        Kwargs:
+        
+            channel (str): the channel number given in radioIDs.dat and
+                used in the filename for the data file.
+                
+            label (str): the human-readable name for the appliance this 
+                sensor is connected to.  e.g. "TV"
+        """
+        
         self.time_info = TimeInfo()
-        # physical location of this Sensor: 
-        self.location = '-'
-        # list of all physical locations this sensor has been seen on: 
+        self.location = '-'                        
         self.locations = {} 
-        # this Sensor's radio_id (unique to this Sensor):
         self.radio_id = radio_id 
-        # this Sensor's channel number (also unique to this Sensor)
-        # taken from config file radioIDs.dat. 'channel' will not exist
-        # if there is no radio_id entry in radioIDs.dat for this sensor:
         self.channel = channel
-        # human-readable label for this Sensor (taken from radioIDs.dat): 
         self.label = label
         self.watts = '-'
-        self.last_timecode_written_to_disk = None
+        self._last_timecode_written_to_disk = None
 
     def update(self, watts, cc_channel, current_cost):
         """Process a new sample.
+        
         We use timestamp from local computer, not from the Current Cost.
+        
+        Args:
+        
+            watts (int): instantaneous power measured in watts.
+            
+            cc_channel (int): the Current Cost channel this sensor 
+                appears on.
+            
+            current_cost (CurrentCost): the Current Cost this sensor
+                appears on
         
         """
         self.time_info.update()
@@ -172,24 +230,25 @@ class Sensor(object):
         self.write_to_disk()
 
     def __str__(self):
-        return Sensor.STR_FORMAT.format(self.label, self.channel,
+        return Sensor._STR_FORMAT.format(self.label, self.channel,
                                        self.location.cc_channel, self.watts, 
                                        self.time_info, self.radio_id, 
                                        self.locations) 
 
     def write_to_disk(self):
         """Dump a line of data to this Sensor's output file."""
+        
         timecode = int(round(self.time_info.last_seen))
         
         # First check to see if we've already written this to disk 
-        # (possibly because multiple current cost monitors hear this sensor)
-        if timecode == self.last_timecode_written_to_disk:
+        # (possibly because multiple _current cost monitors hear this sensor)
+        if timecode == self._last_timecode_written_to_disk:
             print("Timecode {} already written to disk. Label={}, watts={}, "
                   "location={}".format(timecode, self.label, self.watts,
                                         self.location), file = sys.stderr)
             return
         
-        self.last_timecode_written_to_disk = timecode
+        self._last_timecode_written_to_disk = timecode
         
         if self.channel == '-':
             chan = self.radio_id
@@ -207,17 +266,41 @@ class Sensor(object):
 #     CURRENT COST CLASS            #
 #####################################
 class CurrentCost(threading.Thread):
-    """Represents a physical Current Cost ENVI home energy monitor."""
+    """Represents a physical Current Cost ENVI home energy monitor.
+    
+    Static attributes:
+    
+        sensors: dict of all Sensors, keyed by radio_id
+    
+    Attributes:
+    
+        print_xml (bool): True if we just want to print XML from the 
+            Current Cost to stdout.  Defaults to False.
+            
+        port (str): Serial port e.g. "/dev/ttyUSB0"
+        
+        serial (serial.Serial): a serial.Serial object.
+        
+        local_sensors (dict): Dict of Sensors on this CurrentCost,
+            keyed by cc_channel.
+            
+        dsb (str): Days since birth. Only set after calling get_info().
+        
+        cc_version (string): CurrentCost version number.  Only set after
+            calling get_info().
+    
+    """
 
-    sensors = {} # Static variable.  A dict of all sensors; keyed by radio_id.
+    sensors = {}
+    
+    MAX_RETRIES = 10
 
     def __init__(self, port):
         threading.Thread.__init__(self)
-        self.print_xml = False # Should we be in "print_xml" mode?
-        self.port = port # Serial port e.g. "/dev/ttyUSB0"
-        self.serial = None # A serial.Serial object
-        self.local_sensors = {} # Dict of references to Sensors
-        # on this CurrentCost; keyed by cc_channel
+        self.print_xml = False
+        self.port = port
+        self.serial = None
+        self.local_sensors = {}
 
         try:
             self._open_port()
@@ -230,6 +313,7 @@ class CurrentCost(threading.Thread):
 
     def _open_port(self):
         """Open the serial port."""
+        
         if self.serial is not None and self.serial.isOpen():
             print("Closing serial port {}\n".format(self.port),
                    file=sys.stderr)
@@ -257,6 +341,7 @@ class CurrentCost(threading.Thread):
 
     def run(self):
         """This is what the threading framework runs."""
+        
         global _abort
         try:
             if self.print_xml: # Just print XML to the screen
@@ -271,9 +356,16 @@ class CurrentCost(threading.Thread):
     
     def readline(self):
         """Read a line from the serial port.  Blocking.
+        
         On error, print useful message and raise the error.
         
+        Returns:
+            line (str): A line of XML from the Current Cost.
+        
+        Raises:
+            OSError, serial.SerialException, ValueError
         """
+        
         try:
             line = self.serial.readline()
         except OSError, e: # catch errors raised by serial.readline
@@ -292,11 +384,17 @@ class CurrentCost(threading.Thread):
         
         return line
 
-    def reset_serial(self, i, retries):
-        """Reset the serial port."""            
+    def reset_serial(self, retry_attempt):
+        """Reset the serial port.
+        
+        Args:
+            retry_attempt (int): current retry number
+        
+        """ 
+                   
         time.sleep(1) 
         print("retrying... reset_serial number {} of {}\n"
-              .format(i, retries), file=sys.stderr)
+              .format(retry_attempt, CurrentCost.MAX_RETRIES), file=sys.stderr)
             
         # Try to flush the serial port.
         try:
@@ -311,25 +409,33 @@ class CurrentCost(threading.Thread):
             pass
         
     def read_xml(self, data):
-        """Reads a line from the serial port and returns an ElementTree. 
-        'data' is a dict. The keys = the elements we search for in the XML.
-        'data' is returned with the correct fields filled in from the XML.
+        """Reads a line from the serial port and processes XML. 
+        
+        Args:
+            data (dict): The keys = the elements we search for in the XML.
+            
+        Returns:
+            data dict is returned with the correct fields
+            filled in from the XML.
+            
+        Raises:
+            IAMLoggerError: if we fail after CurrentCost.MAX_RETRIES.
         
         """
-        RETRIES = 10
-        for i in range(RETRIES):
+
+        for retry_attempt in range(CurrentCost.MAX_RETRIES):
             try:
                 line = self.readline()
                 tree = ET.XML(line)
             except (OSError, serial.SerialException, ValueError): 
                 # raised by readline()
-                self.reset_serial(i, RETRIES)
+                self.reset_serial(retry_attempt)
             except ET.ParseError, e: 
-                # Catch XML errors (occasionally the current cost 
+                # Catch XML errors (occasionally the _current cost 
                 # outputs malformed XML)
                 print('XML error: ', str(e), line, sep='\n', file=sys.stderr)
             else:
-                # Check if this is histogram data from the current cost
+                # Check if this is histogram data from the _current cost
                 # (which we're not interested in)
                 # (This could also be done by checking the size of 'line' 
                 # - this would probably be faster although
@@ -356,7 +462,8 @@ class CurrentCost(threading.Thread):
         # If we get to here then we have failed after every retry    
         global _abort
         _abort = True
-        raise IAMLoggerError('read_xml failed after {} retries'.format(RETRIES))
+        raise IAMLoggerError('read_xml failed after {} retries'
+                             .format(CurrentCost.MAX_RETRIES))
 
     def _get_info(self):
         """Get DSB (days since birth) and version
@@ -368,7 +475,12 @@ class CurrentCost(threading.Thread):
         self.cc_version = data['src']
 
     def update(self):
-        """Read data from serial port."""
+        """Read data from serial port and update relevant sensor.
+        
+        If data from serial port reveals a novel Sensor with a radio ID
+        we have not seen before then create a new Sensor (with not label
+        or channel).
+        """
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
         data = {'id': None, 'sensor': None, 'ch1/watts': None}
@@ -391,7 +503,7 @@ class CurrentCost(threading.Thread):
         CurrentCost.sensors[radio_id].update(watts, cc_channel, self)
         lock.release()
         
-        # Maintain a local dict of sensors connected to this current cost
+        # Maintain a local dict of sensors connected to this _current cost
         self.local_sensors[cc_channel] = CurrentCost.sensors[radio_id]
 
     def __str__(self):
@@ -414,14 +526,23 @@ class CurrentCost(threading.Thread):
 
 
 class Manager(object):
-    """Singleton. Used to manage multiple CurrentCost objects."""
+    """Singleton. Used to manage multiple CurrentCost objects.
+    
+    Attributes:
+    
+        current_costs (list): list of CurrentCost objects
+        
+        args : command line arguments
+    
+    """
 
     def __init__(self, current_costs, args):
-        self.current_costs = current_costs # list of Current Costs
-        self.args = args # command line arguments
+        self.current_costs = current_costs
+        self.args = args
         
     def run(self):
-        # Start each monitor thread
+        """Start each CurrentCost thread."""
+        
         for current_cost in self.current_costs:
             current_cost.print_xml = self.args.print_xml
             current_cost.start()
@@ -455,6 +576,7 @@ class Manager(object):
 
     def stop(self):
         """Gracefully attempt to bring the system to a halt.
+        
         Specifically we ask every CurrentCost thread to stop 
         by setting '_abort' to True and then we wait patiently
         for every CurrentCost to return from its last blocked read.
@@ -483,8 +605,10 @@ class Manager(object):
         return string
 
 def check_for_duplicates(list_, label):
-    """Check for duplicate entries in a list.
-    If duplicates are found then raise an Exception.
+    """Check for duplicate entries in list_
+    
+    Raises:
+        IAMLoggerError: duplicates found in list_
     
     """
     duplicates = {}
@@ -503,7 +627,21 @@ def check_for_duplicates(list_, label):
 #########################################
 
 def load_config():
-    """Load config data from config files."""
+    """Load config data from config files and init Current Costs.
+    
+    Sets global _directory variable.
+    
+    For each "serialport" listed in config.xml, init a new CurrentCost.
+    
+    Load and process radioIDs.dat.  Check for duplicate radioIDs and channels.
+    
+    Write a _directory/labels.dat file which maps channel number to label
+    as per the original REDD file format.
+    
+    Returns:
+        a list of initialised CurrentCost objects.
+    
+    """
     config_tree   = ET.parse("config.xml") # load config from config file
     global _directory
     _directory    = config_tree.findtext("directory") # File to save data to
@@ -516,7 +654,7 @@ def load_config():
         
     # Loading radio_id mappings
     try:
-        radio_id_fh = open("radioIDs.dat", "r") # fh = file handle
+        radio_id_fh = open("radioIDs.dat", "r") # "fh" = file handle
     except IOError, e: # file not found
         print("radio_ids.dat file not found. Ignoring.", str(e),
               sep="\n", file=sys.stderr)
@@ -524,17 +662,10 @@ def load_config():
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
 
-        # Handle mapping from radio IDs to labels and channel numbers
-        sensors = {}
-    
-        # list of radio_ids to check for duplicates
-        radio_ids = []
-    
-        # list of channels to check for duplicates
-        channels = []
-        
-        # mapping from channel number to label (for creating labels.dat)
-        channel_map = {}
+        sensors = {} # map radio IDs to Sensors
+        radio_ids = [] # used to check for duplicate radio IDs
+        channels = [] # used to check for duplicate channel numbers
+        channel_map = {} # map channel to label (for creating labels.dat)
 
         for line in lines:
             partition = line.partition('#') # ignore comments
@@ -554,10 +685,9 @@ def load_config():
             print(str(e))
             raise
         
-        # Set static variable in Sensor class
         CurrentCost.sensors = sensors
         
-        # write labels.dat file to disk
+        # Write labels.dat file to disk
         labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
         channel_keys = channel_map.keys()
         channel_keys.sort()
@@ -569,23 +699,20 @@ def load_config():
     return current_costs
 
 
-#########################################
-#      HANDLE SIGINTs                   #
-# So we do the right thing with CTRL+C  #
-#########################################
-
 def _signal_handler(signal_number, frame):
+    """Handle SIGINT and SIGTERM.
+    
+    Required to handle events like CTRL+C and kill.  Sets _abort to True
+    to tell all threads to terminate ASAP.
+    """
+    
     signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
     print("\nSignal {} received.".format(signal_names[signal_number]))
     global _abort
     _abort = True
 
 
-###############################################
-#  PROCESS COMMAND LINE ARGUMENTS AND RUN     #
-###############################################
-
-if __name__ == "__main__":
+def main():
     # Process command line args
     parser = argparse.ArgumentParser(description='Log data from multiple '
                                      'Current Cost IAMs.')
@@ -617,3 +744,6 @@ if __name__ == "__main__":
     except Exception:
         manager.stop()
         raise                
+
+if __name__ == "__main__":
+    main()
