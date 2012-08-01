@@ -213,18 +213,20 @@ class CurrentCost(threading.Thread):
 
     def __init__(self, port):
         threading.Thread.__init__(self)
-        global _abort        
+        self.print_xml = False # Should we be in "print_xml" mode?
+        self.port = port # Serial port e.g. "/dev/ttyUSB0"
+        self.serial = None # A serial.Serial object
+        self.local_sensors = {} # Dict of references to Sensors
+        # on this CurrentCost; keyed by cc_channel
+
         try:
-            self.print_xml = False # Should we be in "print_xml" mode?
-            self.port = port # Serial port e.g. "/dev/ttyUSB0"
-            self.serial = None # A serial.Serial object
             self._open_port()
-            self._get_info()
-            self.local_sensors = {} # Dict of references to Sensors
-            # on this CurrentCost; keyed by cc_channel
         except (OSError, serial.SerialException):
+            global _abort            
             _abort = True
             raise
+        
+        self._get_info()
 
     def _open_port(self):
         """Open the serial port."""
@@ -240,7 +242,6 @@ class CurrentCost(threading.Thread):
         
         try:
             self.serial = serial.Serial(self.port, 57600)
-            self.serial.flushInput()
         except OSError, e:
             print("Serial port " + self.port + 
                   " unavailable.  Is another process using it?", 
@@ -251,6 +252,8 @@ class CurrentCost(threading.Thread):
                   "Is the correct USB port specified in config.xml?\n",
                    sep="\n", file=sys.stderr)
             raise
+        
+        self.serial.flushInput()
 
     def run(self):
         """This is what the threading framework runs."""
@@ -262,7 +265,7 @@ class CurrentCost(threading.Thread):
             else:            
                 while _abort == False:
                     self.update()
-        except Exception:
+        except Exception: # catch any exception
             _abort = True
             raise
     
@@ -318,7 +321,14 @@ class CurrentCost(threading.Thread):
             try:
                 line = self.readline()
                 tree = ET.XML(line)
-                
+            except (OSError, serial.SerialException, ValueError): 
+                # raised by readline()
+                self.reset_serial(i, RETRIES)
+            except ET.ParseError, e: 
+                # Catch XML errors (occasionally the current cost 
+                # outputs malformed XML)
+                print('XML error: ', str(e), line, sep='\n', file=sys.stderr)
+            else:
                 # Check if this is histogram data from the current cost
                 # (which we're not interested in)
                 # (This could also be done by checking the size of 'line' 
@@ -341,15 +351,7 @@ class CurrentCost(threading.Thread):
                     return data
                 else:
                     continue
-                
-            except (OSError, serial.SerialException, ValueError): 
-                # raised by readline()
-                self.reset_serial(i, RETRIES)
-            except ET.ParseError, e: 
-                # Catch XML errors (occasionally the current cost 
-                # outputs malformed XML)
-                print('XML error: ', str(e), line, sep='\n', file=sys.stderr)
-                self.reset_serial(i, RETRIES)
+                                
         
         # If we get to here then we have failed after every retry    
         global _abort
@@ -515,7 +517,10 @@ def load_config():
     # Loading radio_id mappings
     try:
         radio_id_fh = open("radioIDs.dat", "r") # fh = file handle
-        # if file doesn't exist then skip the rest of this try block
+    except IOError, e: # file not found
+        print("radio_ids.dat file not found. Ignoring.", str(e),
+              sep="\n", file=sys.stderr)
+    else:
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
 
@@ -541,9 +546,13 @@ def load_config():
                 radio_ids.append(radio_id)
                 channels.append(channel)
                 channel_map[channel] = label
-                        
-        check_for_duplicates(radio_ids, 'radio_ids')
-        check_for_duplicates(channels, 'channels')
+
+        try:                        
+            check_for_duplicates(radio_ids, 'radio_ids')
+            check_for_duplicates(channels, 'channels')
+        except IAMLoggerError, e: # duplicates found        
+            print(str(e))
+            raise
         
         # Set static variable in Sensor class
         CurrentCost.sensors = sensors
@@ -557,13 +566,6 @@ def load_config():
                                              channel_map[channel_key]))
         labels_fh.close()
 
-    except IOError, e: # file not found
-        print("radio_ids.dat file not found. Ignoring.", str(e),
-              sep="\n", file=sys.stderr)
-    except IAMLoggerError, e: # duplicates found        
-        print(str(e))
-        raise
-            
     return current_costs
 
 
