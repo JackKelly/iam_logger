@@ -34,8 +34,8 @@ def printToStdoutAndStderr(msg):
 #     GLOBALS                        #
 ######################################
 
-abort = False # Make this True to halt all threads
-directory = None # The directory to write data to. Set by config.xml
+_abort = False # Make this True to halt all threads
+_directory = None # The _directory to write data to. Set by config.xml
 
 
 ######################################
@@ -189,7 +189,7 @@ class Sensor(object):
         else:
             chan = self.channel
         
-        filename =  directory + "channel_" + str(chan) + ".dat"
+        filename =  _directory + "channel_" + str(chan) + ".dat"
         filehandle = open(filename, 'a+')
         data = '{:d} {} {}\n'.format(timecode, self.watts, self.location)
         filehandle.write(data)
@@ -206,7 +206,7 @@ class CurrentCost(threading.Thread):
 
     def __init__(self, port):
         threading.Thread.__init__(self)
-        global abort        
+        global _abort        
         try:
             self.printXML = False # Should we be in "printXML" mode?
             self.port = port # Serial port e.g. "/dev/ttyUSB0"
@@ -216,7 +216,7 @@ class CurrentCost(threading.Thread):
             self.localSensors = {} # Dict of references to Sensors
             # on this CurrentCost; keyed by ccChannel
         except (OSError, serial.SerialException):
-            abort = True
+            _abort = True
             raise
 
     def _openPort(self):
@@ -247,16 +247,16 @@ class CurrentCost(threading.Thread):
 
     def run(self):
         """This is what the threading framework runs."""
-        global abort
+        global _abort
         try:
             if self.printXML == True: # Just print XML to the screen
-                while abort == False:
+                while _abort == False:
                     print(str(self.port), self.readLine(), sep="\n")
             else:            
-                while abort == False:
+                while _abort == False:
                     self.update()
         except:
-            abort = True
+            _abort = True
             raise
     
     def readLine(self):
@@ -345,8 +345,8 @@ class CurrentCost(threading.Thread):
                 self.resetSerial(i, RETRIES)
         
         # If we get to here then we have failed after every retry    
-        global abort
-        abort = True
+        global _abort
+        _abort = True
         raise Exception("readXML failed after {} retries".format(RETRIES))
 
     def _getInfo(self):
@@ -430,7 +430,7 @@ class Manager(object):
         self.stop()
 
     def writeStatsToScreen(self):
-        while abort == False:
+        while _abort == False:
             os.system('clear')
             print(str(self))
             print("Press CTRL+C to stop.\n")                
@@ -438,7 +438,7 @@ class Manager(object):
 
     def writeStatsToFile(self):
         print("Press CTRL+C to stop.\n")
-        while abort == False:
+        while _abort == False:
             statsFileHandle = open("stats.dat", "w")            
             print(str(self), file=statsFileHandle)
             statsFileHandle.close()
@@ -447,13 +447,13 @@ class Manager(object):
     def stop(self):
         """Gracefully attempt to bring the system to a halt.
         Specifically we ask every CurrentCost thread to stop 
-        by setting 'abort' to True and then we wait patiently
+        by setting '_abort' to True and then we wait patiently
         for every CurrentCost to return from its last blocked read.
         
         """
            
-        global abort
-        abort = True
+        global _abort
+        _abort = True
         
         printToStdoutAndStderr("Stopping...")
 
@@ -496,8 +496,8 @@ def checkForDuplicates(lst, label):
 def loadConfig():
     """Load config data from config files."""
     configTree   = ET.parse("config.xml") # load config from config file
-    global directory
-    directory    = configTree.findtext("directory") # File to save data to
+    global _directory
+    _directory   = configTree.findtext("directory") # File to save data to
     serialsETree = configTree.findall("serialport")
 
     # Start a CurrentCost for each serial port in config.xml
@@ -543,7 +543,7 @@ def loadConfig():
         CurrentCost.sensors = sensors
         
         # write labels.dat file to disk
-        labelsDatHandle = open(directory + 'labels.dat', 'w')
+        labelsDatHandle = open(_directory + 'labels.dat', 'w')
         chanKeys = channelNumMap.keys()
         chanKeys.sort()
         for chanKey in chanKeys:
@@ -569,8 +569,8 @@ def loadConfig():
 def signalHandler(signalNumber, frame):
     signalNames = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
     print("\nSignal {} received.".format(signalNames[signalNumber]))
-    global abort
-    abort = True
+    global _abort
+    _abort = True
 
 
 ###############################################
