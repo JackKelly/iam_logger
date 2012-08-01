@@ -3,3 +3,5 @@
 config.xml
 errors.txt
 data/
+nohup.out
+stats.dat
