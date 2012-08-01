@@ -9,12 +9,17 @@ import argparse
 import threading
 import signal
 
-# TODO: Order new _current cost and some more IAMs (check blog)
+# TODO: Order new current cost and some more IAMs (check blog)
 
-# TODO: When in noDisplay mode, write stats summary to a file once a minute.
-
-# TODO: Automatically transfer files from study computer to living
-# room computer for checking; then automatically upload to github once a week.
+"""
+ TODO: Automatically transfer files from study computer to living
+ room computer for checking; then automatically upload to github once a week.
+ 
+ The network might block us for a while so have a separate thread for each
+ Current Cost's network access.  These threads will block until their relevant
+ CurrentCost has new data to send.  Attempt to send new data.
+ 
+"""
 
 # TODO: Write a script to check sync between aggregate files on both computers
 
@@ -38,6 +43,111 @@ _directory = None # The _directory to write data to. Set by config.xml
 def print_to_stdout_and_stderr(msg):
     print(msg)
     print(msg, file=sys.stderr)
+
+
+def check_for_duplicates(list_, label):
+    """Check for duplicate entries in list_
+    
+    Raises:
+        IAMLoggerError: duplicates found in list_
+    
+    """
+    duplicates = {}
+    for item in list_:
+        count = list_.count(item)
+        if count > 1 and item not in duplicates.keys():
+            duplicates[item] = count
+            
+    if duplicates: # if duplicates contains any items
+        raise IAMLoggerError("ERROR in radioIDs.dat. Duplicate {} found: {}\n"
+                        .format(label, duplicates))        
+
+
+def load_config():
+    """Load config data from config files and init Current Costs.
+    
+    Sets global _directory variable.
+    
+    For each "serialport" listed in config.xml, init a new CurrentCost.
+    
+    Load and process radioIDs.dat.  Check for duplicate radioIDs and channels.
+    
+    Write a _directory/labels.dat file which maps channel number to label
+    as per the original REDD file format.
+    
+    Returns:
+        a list of initialised CurrentCost objects.
+    
+    """
+    config_tree   = ET.parse("config.xml") # load config from config file
+    global _directory
+    _directory    = config_tree.findtext("directory") # File to save data to
+    serials_etree = config_tree.findall("serialport")
+
+    # Start a CurrentCost for each serial port in config.xml
+    current_costs = []
+    for serial_port in serials_etree:
+        current_costs.append(CurrentCost(serial_port.text))
+        
+    # Loading radio_id mappings
+    try:
+        radio_id_fh = open("radioIDs.dat", "r") # "fh" = file handle
+    except IOError, e: # file not found
+        print("radio_ids.dat file not found. Ignoring.", str(e),
+              sep="\n", file=sys.stderr)
+    else:
+        lines = radio_id_fh.readlines()
+        radio_id_fh.close()
+
+        sensors = {} # map radio IDs to Sensors
+        radio_ids = [] # used to check for duplicate radio IDs
+        channels = [] # used to check for duplicate channel numbers
+        channel_map = {} # map channel to label (for creating labels.dat)
+
+        for line in lines:
+            partition = line.partition('#') # ignore comments
+            fields = partition[0].strip().split()
+            if len(fields) == 3:
+                channel, label, radio_id = fields
+                radio_id = int(radio_id)
+                sensors[radio_id] = Sensor(radio_id, channel, label)
+                radio_ids.append(radio_id)
+                channels.append(channel)
+                channel_map[channel] = label
+
+        try:                        
+            check_for_duplicates(radio_ids, 'radio_ids')
+            check_for_duplicates(channels, 'channels')
+        except IAMLoggerError, e: # duplicates found        
+            print(str(e))
+            raise
+        
+        CurrentCost.sensors = sensors
+        
+        # Write labels.dat file to disk
+        labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
+        channel_keys = channel_map.keys()
+        channel_keys.sort()
+        for channel_key in channel_keys:
+            labels_fh.write('{} {}\n'.format(channel_key, 
+                                             channel_map[channel_key]))
+        labels_fh.close()
+
+    return current_costs
+
+
+def _signal_handler(signal_number, frame):
+    """Handle SIGINT and SIGTERM.
+    
+    Required to handle events like CTRL+C and kill.  Sets _abort to True
+    to tell all threads to terminate ASAP.
+    """
+    
+    signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
+    print("\nSignal {} received.".format(signal_names[signal_number]))
+    global _abort
+    _abort = True
+
 
 #==============================================================================
 # CLASSES
@@ -603,114 +713,10 @@ class Manager(object):
             string += str(current_cost)
             
         return string
-
-def check_for_duplicates(list_, label):
-    """Check for duplicate entries in list_
     
-    Raises:
-        IAMLoggerError: duplicates found in list_
-    
-    """
-    duplicates = {}
-    for item in list_:
-        count = list_.count(item)
-        if count > 1 and item not in duplicates.keys():
-            duplicates[item] = count
-            
-    if duplicates: # if duplicates contains any items
-        raise IAMLoggerError("ERROR in radioIDs.dat. Duplicate {} found: {}\n"
-                        .format(label, duplicates))        
-
-
-#########################################
-#      LOAD CONFIG                      #
-#########################################
-
-def load_config():
-    """Load config data from config files and init Current Costs.
-    
-    Sets global _directory variable.
-    
-    For each "serialport" listed in config.xml, init a new CurrentCost.
-    
-    Load and process radioIDs.dat.  Check for duplicate radioIDs and channels.
-    
-    Write a _directory/labels.dat file which maps channel number to label
-    as per the original REDD file format.
-    
-    Returns:
-        a list of initialised CurrentCost objects.
-    
-    """
-    config_tree   = ET.parse("config.xml") # load config from config file
-    global _directory
-    _directory    = config_tree.findtext("directory") # File to save data to
-    serials_etree = config_tree.findall("serialport")
-
-    # Start a CurrentCost for each serial port in config.xml
-    current_costs = []
-    for serial_port in serials_etree:
-        current_costs.append(CurrentCost(serial_port.text))
-        
-    # Loading radio_id mappings
-    try:
-        radio_id_fh = open("radioIDs.dat", "r") # "fh" = file handle
-    except IOError, e: # file not found
-        print("radio_ids.dat file not found. Ignoring.", str(e),
-              sep="\n", file=sys.stderr)
-    else:
-        lines = radio_id_fh.readlines()
-        radio_id_fh.close()
-
-        sensors = {} # map radio IDs to Sensors
-        radio_ids = [] # used to check for duplicate radio IDs
-        channels = [] # used to check for duplicate channel numbers
-        channel_map = {} # map channel to label (for creating labels.dat)
-
-        for line in lines:
-            partition = line.partition('#') # ignore comments
-            fields = partition[0].strip().split()
-            if len(fields) == 3:
-                channel, label, radio_id = fields
-                radio_id = int(radio_id)
-                sensors[radio_id] = Sensor(radio_id, channel, label)
-                radio_ids.append(radio_id)
-                channels.append(channel)
-                channel_map[channel] = label
-
-        try:                        
-            check_for_duplicates(radio_ids, 'radio_ids')
-            check_for_duplicates(channels, 'channels')
-        except IAMLoggerError, e: # duplicates found        
-            print(str(e))
-            raise
-        
-        CurrentCost.sensors = sensors
-        
-        # Write labels.dat file to disk
-        labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
-        channel_keys = channel_map.keys()
-        channel_keys.sort()
-        for channel_key in channel_keys:
-            labels_fh.write('{} {}\n'.format(channel_key, 
-                                             channel_map[channel_key]))
-        labels_fh.close()
-
-    return current_costs
-
-
-def _signal_handler(signal_number, frame):
-    """Handle SIGINT and SIGTERM.
-    
-    Required to handle events like CTRL+C and kill.  Sets _abort to True
-    to tell all threads to terminate ASAP.
-    """
-    
-    signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
-    print("\nSignal {} received.".format(signal_names[signal_number]))
-    global _abort
-    _abort = True
-
+#==============================================================================
+# MAIN FUNCTION
+#==============================================================================
 
 def main():
     # Process command line args
