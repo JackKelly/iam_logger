@@ -259,11 +259,11 @@ class CurrentCost(threading.Thread):
         """This is what the threading framework runs."""
         global _abort
         try:
-            if self.print_xml == True: # Just print XML to the screen
-                while _abort == False:
+            if self.print_xml: # Just print XML to the screen
+                while not _abort:
                     print(str(self.port), self.readline(), sep="\n")
             else:            
-                while _abort == False:
+                while not _abort:
                     self.update()
         except Exception: # catch any exception
             _abort = True
@@ -439,7 +439,7 @@ class Manager(object):
         self.stop()
 
     def write_stats_to_screen(self):
-        while _abort == False:
+        while not _abort:
             os.system('clear')
             print(str(self))
             print("Press CTRL+C to stop.\n")                
@@ -447,7 +447,7 @@ class Manager(object):
 
     def write_stats_to_file(self):
         print("Press CTRL+C to stop.\n")
-        while _abort == False:
+        while not _abort:
             stats_file_handle = open("stats.dat", "w")            
             print(str(self), file=stats_file_handle)
             stats_file_handle.close()
