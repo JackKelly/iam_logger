@@ -245,10 +245,7 @@ class Location(object):
     def __repr__(self):
         return 'Location({})'.format(str(self))
 
-    
-#####################################
-#     SENSOR CLASS                  #
-#####################################
+
 class Sensor(object):
     """Represent physical sensors: IAMs and CT clamps.
     
@@ -372,9 +369,6 @@ class Sensor(object):
         filehandle.close()
 
 
-#####################################
-#     CURRENT COST CLASS            #
-#####################################
 class CurrentCost(threading.Thread):
     """Represents a physical Current Cost ENVI home energy monitor.
     
@@ -719,6 +713,7 @@ class Manager(object):
 #==============================================================================
 
 def main():
+    
     # Process command line args
     parser = argparse.ArgumentParser(description='Log data from multiple '
                                      'Current Cost IAMs.')
@@ -735,14 +730,15 @@ def main():
     
     args = parser.parse_args()
 
-    # load config
+    # load config files and initialise Current Costs
     current_costs = load_config()
 
-    # register SIGINT handler
+    # register SIGINT and SIGTERM handler
     print("setting signal handler")
     signal.signal(signal.SIGINT,  _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)    
 
+    # initialise and run Manager
     manager = Manager(current_costs, args)        
 
     try:
