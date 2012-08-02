@@ -869,7 +869,6 @@ def main():
                         '\n   %(message)s')
     logging.debug('MAIN: iam_logger.py starting up.')
 
-
     # load config files and initialise Current Costs
     current_costs = load_config()    
     
@@ -879,15 +878,14 @@ def main():
     signal.signal(signal.SIGTERM, _signal_handler)
     # We use the ALARM signal to trigger a git push: 
     signal.signal(signal.SIGALRM, _alarm_handler)
+    logging.info("MAIN: Setting SIGALRM with period = {}s."
+                 .format(_git_update_period))
+    signal.alarm(_git_update_period)
 
     # start git push
     git_push = _PushToGit()
     git_push.start()
     
-    logging.info("MAIN: Setting SIGALRM with period = {}s."
-                 .format(_git_update_period))
-    signal.alarm(_git_update_period)
-
     # initialise and run Manager
     manager = Manager(current_costs, args)        
 
