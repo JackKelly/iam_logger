@@ -406,6 +406,13 @@ class Sensor(object):
         filehandle.close()
 
 
+class _GitRemoteProgress(git.RemoteProgress):
+    
+    def update(self, op_code, cur_count, max_count=None, messsage=""):
+        print("Hello", file=sys.stderr)        
+        git.RemoteProgress.update(self, op_code, cur_count, max_count=None, messsage="")
+         
+
 class _PushToGit(threading.Thread):
     """Simple little thread for pushing files to git."""
     
@@ -423,14 +430,14 @@ class _PushToGit(threading.Thread):
             self.repo = git.Repo(_directory)
             self.origin = self.repo.remotes.origin
             self.index = self.repo.index
-        except git.exc.GitCommandError, e:
-            print(str(e), file=sys.stderr)
+#        except git.exc.GitCommandError, e:
+#            print(str(e), file=sys.stderr)
         except Exception:
             global _abort
             _abort = True
             raise
         else:
-            print("INFO: Initialised git repo.", file=sys.stderr)                 
+            print("INFO: git repo {}".format(_directory), file=sys.stderr)                 
     
     def run(self):
         self._git_push() # do a git push at start-up
@@ -444,9 +451,7 @@ class _PushToGit(threading.Thread):
             try:
                 self._git_push()
             except Exception:
-                _git_condition_variable.release()
-                global _abort
-                _abort = True
+                _git_condition_variable.release()                
                 break
                 raise
             signal.alarm(_git_update_period)
@@ -458,8 +463,9 @@ class _PushToGit(threading.Thread):
         try:
             # pull to make sure we're up to date otherwise
             # push will fail.            
-            print("INFO: Doing a git pull...", file=sys.stderr)             
-            info = self.origin.pull()[0]             
+            print("INFO: Doing a git pull...", file=sys.stderr)
+            progress = _GitRemoteProgress()
+            info = self.origin.pull(progress=progress)[0]             
             print(info.note, file=sys.stderr)             
             print("INFO: Doing a git add...", file=sys.stderr)             
             print(self.index.add([_directory + '*.dat']), file=sys.stderr)
@@ -472,6 +478,8 @@ class _PushToGit(threading.Thread):
 #        except git.exc.GitCommandError, e:
 #            print(str(e), file=sys.stderr)
         except Exception:
+            global _abort            
+            _abort = True
             raise
         else:
             print("INFO: Finished git push.", file=sys.stderr)
