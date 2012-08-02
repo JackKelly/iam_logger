@@ -469,8 +469,8 @@ class _PushToGit(threading.Thread):
             print("INFO: Doing a git push...", file=sys.stderr)             
             info = self.origin.push()[0]
             print(info.summary, file=sys.stderr)
-        except git.exc.GitCommandError, e:
-            print(str(e), file=sys.stderr)
+#        except git.exc.GitCommandError, e:
+#            print(str(e), file=sys.stderr)
         except Exception:
             raise
         else:
