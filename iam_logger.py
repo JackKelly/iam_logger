@@ -847,7 +847,7 @@ def main():
     parser.add_argument('--noDisplay', dest='noDisplay', action='store_const',
                         const=True, default=False, 
                         help='Do not display info to std out. ' 
-                        'Useful for use with nohup command.')
+                        'Will be enabled automatically if called with nohup.')
     
     parser.add_argument('--print_xml', dest='print_xml', action='store_const',
                         const=True, default=False, help='Just dump XML from '
@@ -868,6 +868,12 @@ def main():
                         'function=%(funcName)s, thread=%(threadName)s'
                         '\n   %(message)s')
     logging.debug('MAIN: iam_logger.py starting up.')
+
+    # Check if iam_logger.py is being run using nohup
+    if not os.isatty(sys.stdout.fileno()):
+        logging.info("stdout is not a TTY so let's assume this program\n"
+                     "   has been called using nohup: enabling --noDisplay.")
+        args.noDisplay = True
 
     # load config files and initialise Current Costs
     current_costs = load_config()    
