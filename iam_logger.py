@@ -2,8 +2,7 @@
 
 """
 REQUIREMENTS:
-    * gitpython
-    * git >=1.7.11             
+    * gitpython           
 """
 
 from __future__ import print_function, division
@@ -411,18 +410,7 @@ class Sensor(object):
         data = '{:d} {} {}\n'.format(timecode, self.watts, self.location)
         filehandle.write(data)
         filehandle.close()
-
-
-class _GitRemoteProgress(git.RemoteProgress):
-    
-    def line_dropped(self, line):
-        print("Hello from line_dropped.\n", line, sep="\n", file=sys.stderr)
-        git.RemoteProgress.line_dropped(self, line)
-    
-    def update(self, op_code, cur_count, max_count=None, message=""):
-        print("Hello.\n", file=sys.stderr)        
-        git.RemoteProgress.update(self, op_code, cur_count, max_count=max_count, message=message)
-         
+        
 
 class _PushToGit(threading.Thread):
     """Simple little thread for pushing files to git."""
@@ -441,8 +429,6 @@ class _PushToGit(threading.Thread):
             self.repo = git.Repo(_directory)
             self.origin = self.repo.remotes.origin
             self.index = self.repo.index
-#        except git.exc.GitCommandError, e:
-#            print(str(e), file=sys.stderr)
         except Exception:
             global _abort
             _abort = True
@@ -475,8 +461,7 @@ class _PushToGit(threading.Thread):
             # pull to make sure we're up to date otherwise
             # push will fail.            
             print("INFO: Doing a git pull...", file=sys.stderr)
-            progress = _GitRemoteProgress()
-            info = self.origin.pull(None, progress)[0] # requires git >=1.7.11             
+            info = self.origin.pull()[0]
             print(info.note, file=sys.stderr)             
             print("INFO: Doing a git add...", file=sys.stderr)             
             print(self.index.add([_directory + '*.dat']), file=sys.stderr)
