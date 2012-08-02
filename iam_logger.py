@@ -441,8 +441,14 @@ class _PushToGit(threading.Thread):
             if _abort:
                 _git_condition_variable.release()                
                 break
-            
-            self._git_push()
+            try:
+                self._git_push()
+            except Exception:
+                _git_condition_variable.release()
+                global _abort
+                _abort = True
+                break
+                raise
             signal.alarm(_git_update_period)
             _git_condition_variable.release()
             
@@ -466,8 +472,6 @@ class _PushToGit(threading.Thread):
         except git.exc.GitCommandError, e:
             print(str(e), file=sys.stderr)
         except Exception:
-            global _abort
-            _abort = True
             raise
         else:
             print("INFO: Finished git push.", file=sys.stderr)
