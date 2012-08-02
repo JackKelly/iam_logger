@@ -8,19 +8,9 @@ import os
 import argparse
 import threading
 import signal
-import git
+import git # gitpython
 
 # TODO: Order new current cost and some more IAMs (check blog)
-
-"""
- TODO: Automatically transfer files from study computer to living
- room computer for checking; then automatically upload to github once a week.
- 
- The network might block us for a while so have a separate thread for each
- Current Cost's network access.  These threads will block until their relevant
- CurrentCost has new data to send.  Attempt to send new data.
- 
-"""
 
 # TODO: Write a script to check sync between aggregate files on both computers
 
@@ -414,7 +404,17 @@ class Sensor(object):
 class _PushToGit(threading.Thread):
     """Simple little thread for pushing files to git."""
     
+    def __init__(self):
+        """Init Thread superclass and git repo."""
+        
+        threading.Thread.__init__(self)
+        try:
+            self.repo = git.Repo(_directory)
+        except git.exc.GitCommandError, e:
+            print(str(e), file=sys.stderr)                    
+    
     def run(self):
+        self._git_push() # do a git push at start-up
         while True:
             _git_condition_variable.acquire()
             _git_condition_variable.wait()
@@ -431,11 +431,13 @@ class _PushToGit(threading.Thread):
         """Push to git remote (e.g. github)."""
     
         try:
-            repo = git.Repo(_directory)
-            print(repo.git.add('.'), file=sys.stderr)
+            # pull to make sure we're up to date otherwise
+            # push will fail.            
+            self.repo.git.pull()             
+            print(self.repo.git.add('.'), file=sys.stderr)
             hostname = os.uname()[1]
-            print(repo.git.commit(m=' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
-            print(repo.git.push(), file=sys.stderr)
+            print(self.repo.git.commit(m=' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
+            print(self.repo.git.push(), file=sys.stderr)
         except git.exc.GitCommandError, e:
             print(str(e), file=sys.stderr)
 
@@ -810,7 +812,8 @@ def main():
     # register SIGINT and SIGTERM handler
     print("setting signal handlers")
     signal.signal(signal.SIGINT,  _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler) 
+    signal.signal(signal.SIGTERM, _signal_handler)
+    # We use the ALARM signal to trigger a git push: 
     signal.signal(signal.SIGALRM, _alarm_handler)
 
     # start git push
