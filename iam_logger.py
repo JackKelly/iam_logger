@@ -14,6 +14,7 @@ import os
 import argparse
 import threading
 import signal
+import logging
 try:
     import git # gitpython
 except Exception, e:
@@ -43,9 +44,9 @@ _git_condition_variable = threading.Condition()
 # UTILITY FUNCTIONS
 #==============================================================================
 
-def print_to_stdout_and_stderr(msg):
+def print_to_stdout_and_log(msg, level=logging.INFO):
     print(msg)
-    print(msg, file=sys.stderr)
+    logging.log(level, msg)
 
 
 def check_for_duplicates(list_, label):
@@ -128,8 +129,8 @@ def load_radio_id_mapping(filename, save_labels_dat=True):
     try:
         radio_id_fh = open(filename, "r") # "fh" = file handle
     except IOError, e: # file not found
-        print("{} file not found. Ignoring.".format(filename), str(e),
-              sep="\n", file=sys.stderr)
+        logging.info("LOADING CONFIG: {} file not found. Ignoring.\n{}"
+                     .format((filename), str(e)))
     else:
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
@@ -154,7 +155,7 @@ def load_radio_id_mapping(filename, save_labels_dat=True):
             check_for_duplicates(radio_ids, 'radio_ids in {}'.format(filename))
             check_for_duplicates(channels, 'channels in {}'.format(filename))
         except IAMLoggerError, e: # duplicates found        
-            print(str(e))
+            logging.exception(str(e))
             raise
         
         # Write labels.dat file to disk
@@ -176,7 +177,8 @@ def _signal_handler(signal_number, frame):
     """
     
     signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
-    print("\nSignal {} received.".format(signal_names[signal_number]))
+    print_to_stdout_and_log("\nSignal {} received."
+                                     .format(signal_names[signal_number]))
     global _abort
     _abort = True
     _notify_git()
@@ -189,12 +191,17 @@ def _notify_git():
 
 
 def _alarm_handler(signal_number, frame):
-    print("alarm", file=sys.stderr)
+    logging.info("_alarm_handler: SIGALRM alarm caught.")
     _notify_git()
 
 #==============================================================================
 # CLASSES
 #==============================================================================
+
+class LogFile(object):
+    def __init__(self):
+        self.logfile = open("log.txt", "w")
+
 
 class IAMLoggerError(Exception):
     """Base class for errors in iam_logger."""
@@ -393,9 +400,10 @@ class Sensor(object):
         # First check to see if we've already written this to disk 
         # (possibly because multiple _current cost monitors hear this sensor)
         if timecode == self._last_timecode_written_to_disk:
-            print("Timecode {} already written to disk. Label={}, watts={}, "
-                  "location={}".format(timecode, self.label, self.watts,
-                                        self.location), file = sys.stderr)
+            logging.info("SENSOR: Timecode {} already written to disk. "
+                         "Label={}, watts={}, location={}"
+                         .format(timecode, self.label,
+                                 self.watts, self.location))
             return
         
         self._last_timecode_written_to_disk = timecode
@@ -411,335 +419,6 @@ class Sensor(object):
         filehandle.write(data)
         filehandle.close()
         
-
-class _PushToGit(threading.Thread):
-    """Simple little thread for pushing files to git."""
-    
-    # GitPython tutorial here:
-    # http://packages.python.org/GitPython/0.3.2/tutorial.html
-    #
-    # GitPython API refernce here:
-    # http://packages.python.org/GitPython/0.3.2/reference.html
-    
-    def __init__(self):
-        """Init Thread superclass and git repo."""
-        
-        threading.Thread.__init__(self)
-        try:
-            self.repo = git.Repo(_directory)
-            self.origin = self.repo.remotes.origin
-            self.index = self.repo.index
-        except Exception:
-            global _abort
-            _abort = True
-            raise
-        else:
-            print("INFO: git repo {}".format(_directory), file=sys.stderr)                 
-    
-    def run(self):
-        self._git_push() # do a git push at start-up
-        while True:
-            _git_condition_variable.acquire()
-            _git_condition_variable.wait()
-            
-            if _abort:
-                _git_condition_variable.release()                
-                break
-            try:
-                self._git_push()
-            except Exception:
-                _git_condition_variable.release()                
-                break
-                raise
-            signal.alarm(_git_update_period)
-            _git_condition_variable.release()
-            
-    def _git_push(self):
-        """Push to git remote (e.g. github)."""
-    
-        try:
-            # pull to make sure we're up to date otherwise
-            # push will fail.            
-            print("INFO: Doing a git pull...", file=sys.stderr)
-            info = self.origin.pull()[0]
-            print(info.note, file=sys.stderr)             
-            print("INFO: Doing a git add...", file=sys.stderr)             
-            print(self.index.add([_directory + '*.dat']), file=sys.stderr)
-            hostname = os.uname()[1]
-            print("INFO: Doing a git commit...", file=sys.stderr)             
-            print(self.index.commit(' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
-            print("INFO: Doing a git push...", file=sys.stderr)             
-            info = self.origin.push()[0]
-            print(info.summary, file=sys.stderr)
-#        except git.exc.GitCommandError, e:
-#            print(str(e), file=sys.stderr)
-        except Exception:
-            global _abort            
-            _abort = True
-            raise
-        else:
-            print("INFO: Finished git push.", file=sys.stderr)
-
-
-class CurrentCost(threading.Thread):
-    """Represents a physical Current Cost ENVI home energy monitor.
-    
-    Static attributes:
-    
-        sensors: dict of all Sensors, keyed by radio_id
-    
-    Attributes:
-    
-        print_xml (bool): True if we just want to print XML from the 
-            Current Cost to stdout.  Defaults to False.
-            
-        port (str): Serial port e.g. "/dev/ttyUSB0"
-        
-        serial (serial.Serial): a serial.Serial object.
-        
-        local_sensors (dict): Dict of Sensors on this CurrentCost,
-            keyed by cc_channel.
-            
-        dsb (str): Days since birth. Only set after calling get_info().
-        
-        cc_version (string): CurrentCost version number.  Only set after
-            calling get_info().
-    
-    """
-
-    sensors = {}
-    
-    MAX_RETRIES = 10
-
-    def __init__(self, port):
-        threading.Thread.__init__(self)
-        self.print_xml = False
-        self.port = port
-        self.serial = None
-        self.local_sensors = {}
-
-        try:
-            self._open_port()
-        except (OSError, serial.SerialException):
-            global _abort            
-            _abort = True
-            raise
-        
-        self._get_info()
-
-    def _open_port(self):
-        """Open the serial port."""
-        
-        if self.serial is not None and self.serial.isOpen():
-            print("Closing serial port {}\n".format(self.port),
-                   file=sys.stderr)
-            try:
-                self.serial.close()
-            except Exception:
-                pass
-         
-        print("Opening serial port ", self.port, file=sys.stderr)
-        
-        try:
-            self.serial = serial.Serial(self.port, 57600)
-        except OSError, e:
-            print("Serial port " + self.port + 
-                  " unavailable.  Is another process using it?", 
-                  str(e), sep="\n", file=sys.stderr)
-            raise
-        except serial.SerialException, e:
-            print("serial.SerialException:", str(e), 
-                  "Is the correct USB port specified in config.xml?\n",
-                   sep="\n", file=sys.stderr)
-            raise
-        
-        self.serial.flushInput()
-
-    def run(self):
-        """This is what the threading framework runs."""
-        
-        global _abort
-        try:
-            if self.print_xml: # Just print XML to the screen
-                while not _abort:
-                    print(str(self.port), self.readline(), sep="\n")
-            else:            
-                while not _abort:
-                    self.update()
-        except Exception: # catch any exception
-            _abort = True
-            raise
-    
-    def readline(self):
-        """Read a line from the serial port.  Blocking.
-        
-        On error, print useful message and raise the error.
-        
-        Returns:
-            line (str): A line of XML from the Current Cost.
-        
-        Raises:
-            OSError, serial.SerialException, ValueError
-        """
-        
-        try:
-            line = self.serial.readline()
-        except OSError, e: # catch errors raised by serial.readline
-            print("Serial port " + self.port + 
-                  " unavailable.  Is another process using it?",
-                  str(e), sep="\n", file=sys.stderr)
-            raise
-        except serial.SerialException, e:
-            print("SerialException on port {}:".format(self.port), str(e),
-                  "Has the device been unplugged?\n", 
-                  sep="\n", file=sys.stderr)
-            raise
-        except ValueError, e: # Attempting to use a port that is not open
-            print("ValueError: ", str(e), sep="\n", file=sys.stderr)
-            raise
-        
-        return line
-
-    def reset_serial(self, retry_attempt):
-        """Reset the serial port.
-        
-        Args:
-            retry_attempt (int): current retry number
-        
-        """ 
-                   
-        time.sleep(1) 
-        print("retrying... reset_serial number {} of {}\n"
-              .format(retry_attempt, CurrentCost.MAX_RETRIES), file=sys.stderr)
-            
-        # Try to flush the serial port.
-        try:
-            self.serial.flushInput()
-        except Exception: # Ignore errors.  We're going to retry anyway.
-            pass
-            
-        # Try to re-open the port.
-        try:
-            self._open_port()
-        except Exception: # Ignore errors.  We're going to retry anyway.
-            pass
-        
-    def read_xml(self, data):
-        """Reads a line from the serial port and processes XML. 
-        
-        Args:
-            data (dict): The keys = the elements we search for in the XML.
-            
-        Returns:
-            data dict is returned with the correct fields
-            filled in from the XML.
-            
-        Raises:
-            IAMLoggerError: if we fail after CurrentCost.MAX_RETRIES.
-        
-        """
-
-        for retry_attempt in range(CurrentCost.MAX_RETRIES):
-            try:
-                line = self.readline()
-                tree = ET.XML(line)
-            except (OSError, serial.SerialException, ValueError): 
-                # raised by readline()
-                self.reset_serial(retry_attempt)
-            except ET.ParseError, e: 
-                # Catch XML errors (occasionally the _current cost 
-                # outputs malformed XML)
-                print('XML error: ', str(e), line, sep='\n', file=sys.stderr)
-            else:
-                # Check if this is histogram data from the _current cost
-                # (which we're not interested in)
-                # (This could also be done by checking the size of 'line' 
-                # - this would probably be faster although
-                #  possibly the size of a "histogram" is variable)
-                if tree.findtext('hist') is not None:
-                    continue
-                
-                # Check if all the elements we're looking for exist in this XML
-                success = True
-                for key in data.keys():
-                    data[key] = tree.findtext(key)
-                    if data[key] is None:
-                        success = False
-                        print("Key \'{}\' not found in XML:\n{}"
-                              .format(key, line), file=sys.stderr)
-                        break
-                    
-                if success:
-                    return data
-                else:
-                    continue
-                                
-        
-        # If we get to here then we have failed after every retry    
-        global _abort
-        _abort = True
-        raise IAMLoggerError('read_xml failed after {} retries'
-                             .format(CurrentCost.MAX_RETRIES))
-
-    def _get_info(self):
-        """Get DSB (days since birth) and version
-        number from Current Cost monitor.
-        
-        """
-        data            = self.read_xml({'dsb': None, 'src': None})
-        self.dsb        = data['dsb'] 
-        self.cc_version = data['src']
-
-    def update(self):
-        """Read data from serial port and update relevant sensor.
-        
-        If data from serial port reveals a novel Sensor with a radio ID
-        we have not seen before then create a new Sensor (with not label
-        or channel).
-        """
-
-        # For Current Cost XML details, see currentcost.com/cc128/xml.htm
-        data = {'id': None, 'sensor': None, 'ch1/watts': None}
-        data = self.read_xml(data)
-        # radio_id, hopefully unique to an IAM (but not necessarily unique):
-        radio_id   = int(data['id'])
-        cc_channel = int(data['sensor']) # channel on this Current Cost
-        watts      = int(data['ch1/watts'])
-        
-        lock = threading.Lock()
-        
-        if radio_id not in CurrentCost.sensors.keys():
-            print("making new Sensor for radio ID {}"
-                  .format(radio_id),file=sys.stderr)
-            lock.acquire()
-            CurrentCost.sensors[radio_id] = Sensor(radio_id)
-            lock.release()
-        
-        lock.acquire()
-        CurrentCost.sensors[radio_id].update(watts, cc_channel, self)
-        lock.release()
-        
-        # Maintain a local dict of sensors connected to this _current cost
-        self.local_sensors[cc_channel] = CurrentCost.sensors[radio_id]
-
-    def __str__(self):
-        string  = "port      = {}\n".format(self.port)        
-        string += "DSB       = {}\n".format(self.dsb)
-        string += "Version   = {}\n\n".format(self.cc_version)    
-        string += " "*41 + "|---PERIOD STATS (secs)---|\n"
-        string += Sensor.HEADERS
-        
-        cc_channels = self.local_sensors.keys() # keyed by channel number
-        cc_channels.sort()
-        
-        for cc_channel in cc_channels:
-            sensor  = self.local_sensors[cc_channel]
-            string += str(sensor)        
-        
-        string += "\n\n"
-        
-        return string
-
 
 class Manager(object):
     """Singleton. Used to manage multiple CurrentCost objects.
@@ -804,16 +483,16 @@ class Manager(object):
         
         _notify_git()        
         
-        print_to_stdout_and_stderr("Stopping...")
+        print_to_stdout_and_log("Stopping...")
 
         # Don't exit the main thread until our
         # worker CurrentCost threads have all quit
         for currentCost in self.current_costs:
-            print_to_stdout_and_stderr("Waiting for monitor {} to stop..."
+            print_to_stdout_and_log("Waiting for monitor {} to stop..."
                                    .format(currentCost.port))
             currentCost.join()
             
-        print_to_stdout_and_stderr("Done.")
+        print_to_stdout_and_log("Done.")
             
     def __str__(self):
         string = ""             
@@ -822,13 +501,345 @@ class Manager(object):
             
         return string
 
+#==============================================================================
+# threading.Thread subclasses
+# (i.e. classes which are instantiated as threads)
+#==============================================================================
+
+class _PushToGit(threading.Thread):
+    """Simple little thread for pushing files to git."""
+    
+    # GitPython tutorial here:
+    # http://packages.python.org/GitPython/0.3.2/tutorial.html
+    #
+    # GitPython API refernce here:
+    # http://packages.python.org/GitPython/0.3.2/reference.html
+    
+    def __init__(self):
+        """Init Thread superclass and git repo."""
+        
+        threading.Thread.__init__(self, name="_PushToGit")
+        try:
+            self.repo = git.Repo(_directory)
+            self.origin = self.repo.remotes.origin
+            self.index = self.repo.index
+        except Exception:
+            global _abort
+            _abort = True
+            raise
+        else:
+            logging.info("GIT: repo {}".format(_directory))                 
+    
+    def run(self):
+        self._git_push() # do a git push at start-up
+        while True:
+            _git_condition_variable.acquire()
+            _git_condition_variable.wait()
+            
+            if _abort:
+                _git_condition_variable.release()                
+                break
+            try:
+                self._git_push()
+            except Exception:
+                _git_condition_variable.release()                
+                break
+                raise
+            signal.alarm(_git_update_period)
+            _git_condition_variable.release()
+            
+    def _git_push(self):
+        """Push to git remote (e.g. github)."""
+    
+        try:
+            # pull to make sure we're up to date otherwise
+            # push will fail.            
+            logging.info("GIT: Starting git pull. If we get stuck here then\n"
+                         "     check that git pull can be executed\n"
+                         "     without any passwords.")
+            info = self.origin.pull()[0]
+            logging.info("GIT: pull response: {}".format(info.note))            
+            logging.info("GIT: running git add...")             
+            self.index.add([_directory + '*.dat'])
+            hostname = os.uname()[1]
+            commit_msg = 'Automatic upload from {}.'.format(hostname)
+            logging.info("GIT: commiting with message: {}".format(commit_msg))
+            response = self.index.commit(commit_msg)             
+            logging.info("GIT: commit response: {}".format(response))
+            logging.info("GIT: running git push...")             
+            info = self.origin.push()[0]
+            logging.info("GIT: push response: {}".format(info.summary))
+        except Exception:
+            global _abort            
+            _abort = True
+            raise
+        else:
+            logging.info("GIT: Finished git push.  Will run again in "
+                         "{} seconds time.".format(_git_update_period))
+
+
+class CurrentCost(threading.Thread):
+    """Represents a physical Current Cost ENVI home energy monitor.
+    
+    Static attributes:
+    
+        sensors: dict of all Sensors, keyed by radio_id
+    
+    Attributes:
+    
+        print_xml (bool): True if we just want to print XML from the 
+            Current Cost to stdout.  Defaults to False.
+            
+        port (str): Serial port e.g. "/dev/ttyUSB0"
+        
+        serial (serial.Serial): a serial.Serial object.
+        
+        local_sensors (dict): Dict of Sensors on this CurrentCost,
+            keyed by cc_channel.
+            
+        dsb (str): Days since birth. Only set after calling get_info().
+        
+        cc_version (string): CurrentCost version number.  Only set after
+            calling get_info().
+    
+    """
+
+    sensors = {}
+    
+    MAX_RETRIES = 10
+
+    def __init__(self, port):
+        self.port = port        
+        threading.Thread.__init__(self, name="cc_"+port)
+        self.print_xml = False
+        self.serial = None
+        self.local_sensors = {}
+
+        try:
+            self._open_port()
+        except (OSError, serial.SerialException):
+            global _abort            
+            _abort = True
+            raise
+        
+        self._get_info()
+
+    def _open_port(self):
+        """Open the serial port."""
+        
+        if self.serial is not None and self.serial.isOpen():
+            logging.info("SERIAL: Closing serial port {}\n".format(self.port))
+            try:
+                self.serial.close()
+            except Exception:
+                pass
+         
+        logging.info("SERIAL: Opening serial port {}".format(self.port))
+        
+        try:
+            self.serial = serial.Serial(self.port, 57600)
+        except (OSError, serial.SerialException), e:
+            self._handle_serial_port_error(e)
+            raise
+        else:
+            logging.info("SERIAL: Opened serial port {}".format(self.port))            
+        
+        self.serial.flushInput()
+
+    def _handle_serial_port_error(self, error):
+        if isinstance(error, OSError):
+            print_to_stdout_and_log("SERIAL: Serial port " + self.port + 
+                  " unavailable.  Is another process using it?\n" + str(error),
+                  logging.WARNING)
+        elif isinstance(error, serial.SerialException):
+            print_to_stdout_and_log("SERIAL: serial.SerialException: \n"+str(error)+ 
+                  "\nIs the correct USB port specified in config.xml?\n",
+                   logging.WARNING)
+        
+    def run(self):
+        """This is what the threading framework runs."""
+        
+        global _abort
+        try:
+            if self.print_xml: # Just print XML to the screen
+                while not _abort:
+                    print(str(self.port), self.readline(), sep="\n")
+            else:            
+                while not _abort:
+                    self.update()
+        except Exception: # catch any exception
+            _abort = True
+            raise
+    
+    def readline(self):
+        """Read a line from the serial port.  Blocking.
+        
+        On error, print useful message and raise the error.
+        
+        Returns:
+            line (str): A line of XML from the Current Cost.
+        
+        Raises:
+            OSError, serial.SerialException, ValueError
+        """
+        
+        try:
+            line = self.serial.readline()
+        except (OSError, serial.SerialException), e:
+            self._handle_serial_port_error(e)
+            raise
+        except ValueError, e: # Attempting to use a port that is not open
+            logging.error("SERIAL: ValueError: " + str(e))
+            raise
+        
+        return line
+
+    def reset_serial(self, retry_attempt):
+        """Reset the serial port.
+        
+        Args:
+            retry_attempt (int): current retry number
+        
+        """ 
+                   
+        time.sleep(1) 
+        logging.warning("SERIAL: retrying... retry number {} of {}\n"
+              .format(retry_attempt, CurrentCost.MAX_RETRIES))
+            
+        # Try to flush the serial port.
+        try:
+            self.serial.flushInput()
+        except Exception: # Ignore errors.  We're going to retry anyway.
+            pass
+            
+        # Try to re-open the port.
+        try:
+            self._open_port()
+        except Exception: # Ignore errors.  We're going to retry anyway.
+            pass
+        
+    def read_xml(self, data):
+        """Reads a line from the serial port and processes XML. 
+        
+        Args:
+            data (dict): The keys = the elements we search for in the XML.
+            
+        Returns:
+            data dict is returned with the correct fields
+            filled in from the XML.
+            
+        Raises:
+            IAMLoggerError: if we fail after CurrentCost.MAX_RETRIES.
+        
+        """
+
+        for retry_attempt in range(CurrentCost.MAX_RETRIES):
+            try:
+                line = self.readline()
+                tree = ET.XML(line)
+            except (OSError, serial.SerialException, ValueError): 
+                # raised by readline()
+                self.reset_serial(retry_attempt)
+            except ET.ParseError, e: 
+                # Catch XML errors (occasionally the _current cost 
+                # outputs malformed XML)
+                logging.warning('XML error:\n{}\n{}'.format(str(e), line))
+            else:
+                # Check if this is histogram data from the _current cost
+                # (which we're not interested in)
+                # (This could also be done by checking the size of 'line' 
+                # - this would probably be faster although
+                #  possibly the size of a "histogram" is variable)
+                if tree.findtext('hist') is not None:
+                    continue
+                
+                # Check if all the elements we're looking for exist in this XML
+                success = True
+                for key in data.keys():
+                    data[key] = tree.findtext(key)
+                    if data[key] is None:
+                        success = False
+                        logging.warning("XML: Key \'{}\' not found in XML:\n{}"
+                                        .format(key, line))
+                        break
+                    
+                if success:
+                    return data
+                else:
+                    continue
+                                
+        
+        # If we get to here then we have failed after every retry    
+        global _abort
+        _abort = True
+        raise IAMLoggerError('read_xml failed after {} retries'
+                             .format(CurrentCost.MAX_RETRIES))
+
+    def _get_info(self):
+        """Get DSB (days since birth) and version
+        number from Current Cost monitor.
+        
+        """
+        data            = self.read_xml({'dsb': None, 'src': None})
+        self.dsb        = data['dsb'] 
+        self.cc_version = data['src']
+
+    def update(self):
+        """Read data from serial port and update relevant sensor.
+        
+        If data from serial port reveals a novel Sensor with a radio ID
+        we have not seen before then create a new Sensor (with not label
+        or channel).
+        """
+
+        # For Current Cost XML details, see currentcost.com/cc128/xml.htm
+        data = {'id': None, 'sensor': None, 'ch1/watts': None}
+        data = self.read_xml(data)
+        # radio_id, hopefully unique to an IAM (but not necessarily unique):
+        radio_id   = int(data['id'])
+        cc_channel = int(data['sensor']) # channel on this Current Cost
+        watts      = int(data['ch1/watts'])
+        
+        lock = threading.Lock()
+        
+        if radio_id not in CurrentCost.sensors.keys():
+            logging.info("CURRENTCOST: making new Sensor for radio ID {}"
+                         .format(radio_id))
+            lock.acquire()
+            CurrentCost.sensors[radio_id] = Sensor(radio_id)
+            lock.release()
+        
+        lock.acquire()
+        CurrentCost.sensors[radio_id].update(watts, cc_channel, self)
+        lock.release()
+        
+        # Maintain a local dict of sensors connected to this _current cost
+        self.local_sensors[cc_channel] = CurrentCost.sensors[radio_id]
+
+    def __str__(self):
+        string  = "port      = {}\n".format(self.port)        
+        string += "DSB       = {}\n".format(self.dsb)
+        string += "Version   = {}\n\n".format(self.cc_version)    
+        string += " "*41 + "|---PERIOD STATS (secs)---|\n"
+        string += Sensor.HEADERS
+        
+        cc_channels = self.local_sensors.keys() # keyed by channel number
+        cc_channels.sort()
+        
+        for cc_channel in cc_channels:
+            sensor  = self.local_sensors[cc_channel]
+            string += str(sensor)        
+        
+        string += "\n\n"
+        
+        return string
+
 
 #==============================================================================
 # MAIN FUNCTION
 #==============================================================================
 
-def main():
-    
+def main():    
     # Process command line args
     parser = argparse.ArgumentParser(description='Log data from multiple '
                                      'Current Cost IAMs.')
@@ -843,13 +854,27 @@ def main():
                         'the monitor(s) to std out. Do not log data. '
                         '(May not work on Windows)')
     
+    parser.add_argument('--log', dest='loglevel', type=str, default='DEBUG',
+                        help='DEBUG or INFO or WARNING (default: DEBUG)')
+    
     args = parser.parse_args()
+
+    # Set up logging
+    numeric_level = getattr(logging, args.loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError('Invalid log level: {}'.format(args.loglevel))
+    logging.basicConfig(filename='iam_logger.log', level=numeric_level,
+                        format='%(asctime)s level=%(levelname)s: '
+                        'function=%(funcName)s, thread=%(threadName)s'
+                        '\n   %(message)s')
+    logging.debug('MAIN: iam_logger.py starting up.')
+
 
     # load config files and initialise Current Costs
     current_costs = load_config()    
     
     # register SIGINT and SIGTERM handler
-    print("setting signal handlers")
+    logging.info("MAIN: setting signal handlers")
     signal.signal(signal.SIGINT,  _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
     # We use the ALARM signal to trigger a git push: 
@@ -858,6 +883,9 @@ def main():
     # start git push
     git_push = _PushToGit()
     git_push.start()
+    
+    logging.info("MAIN: Setting SIGALRM with period = {}s."
+                 .format(_git_update_period))
     signal.alarm(_git_update_period)
 
     # initialise and run Manager
