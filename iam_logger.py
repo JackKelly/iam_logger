@@ -408,9 +408,9 @@ class Sensor(object):
 
 class _GitRemoteProgress(git.RemoteProgress):
     
-    def update(self, op_code, cur_count, max_count=None, messsage=""):
-        print("Hello", file=sys.stderr)        
-        git.RemoteProgress.update(self, op_code, cur_count, max_count=None, messsage="")
+    def update(self, op_code, cur_count, max_count=None, message=""):
+        print("Hello.\n", file=sys.stderr)        
+        git.RemoteProgress.update(self, op_code, cur_count, max_count=max_count, message=message)
          
 
 class _PushToGit(threading.Thread):
