@@ -1,4 +1,11 @@
 #! /usr/bin/python
+
+"""
+REQUIREMENTS:
+    * gitpython
+    * git >=1.7.11             
+"""
+
 from __future__ import print_function, division
 import serial # for pulling data from Current Cost
 import xml.etree.ElementTree as ET # for XML parsing
@@ -408,6 +415,10 @@ class Sensor(object):
 
 class _GitRemoteProgress(git.RemoteProgress):
     
+    def line_dropped(self, line):
+        print("Hello from line_dropped.\n", line, sep="\n", file=sys.stderr)
+        git.RemoteProgress.line_dropped(self, line)
+    
     def update(self, op_code, cur_count, max_count=None, message=""):
         print("Hello.\n", file=sys.stderr)        
         git.RemoteProgress.update(self, op_code, cur_count, max_count=max_count, message=message)
@@ -464,8 +475,8 @@ class _PushToGit(threading.Thread):
             # pull to make sure we're up to date otherwise
             # push will fail.            
             print("INFO: Doing a git pull...", file=sys.stderr)
-            progresssss = _GitRemoteProgress()
-            info = self.origin.pull(None, progresssss)[0]             
+            progress = _GitRemoteProgress()
+            info = self.origin.pull(None, progress)[0] # requires git >=1.7.11             
             print(info.note, file=sys.stderr)             
             print("INFO: Doing a git add...", file=sys.stderr)             
             print(self.index.add([_directory + '*.dat']), file=sys.stderr)
