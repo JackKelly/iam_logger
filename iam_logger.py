@@ -409,12 +409,20 @@ class Sensor(object):
 class _PushToGit(threading.Thread):
     """Simple little thread for pushing files to git."""
     
+    # GitPython tutorial here:
+    # http://packages.python.org/GitPython/0.3.2/tutorial.html
+    #
+    # GitPython API refernce here:
+    # http://packages.python.org/GitPython/0.3.2/reference.html
+    
     def __init__(self):
         """Init Thread superclass and git repo."""
         
         threading.Thread.__init__(self)
         try:
             self.repo = git.Repo(_directory)
+            self.origin = self.repo.remotes.origin
+            self.index = self.repo.index
         except git.exc.GitCommandError, e:
             print(str(e), file=sys.stderr)
         except Exception:
@@ -445,20 +453,24 @@ class _PushToGit(threading.Thread):
             # pull to make sure we're up to date otherwise
             # push will fail.            
             print("INFO: Doing a git pull...", file=sys.stderr)             
-            print(self.repo.git.pull(), file=sys.stderr)             
+            info = self.origin.pull()[0]             
+            print(info.note, file=sys.stderr)             
             print("INFO: Doing a git add...", file=sys.stderr)             
-            print(self.repo.git.add('.'), file=sys.stderr)
+            print(self.index.add([_directory + '*.dat']), file=sys.stderr)
             hostname = os.uname()[1]
             print("INFO: Doing a git commit...", file=sys.stderr)             
-            print(self.repo.git.commit(m=' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
+            print(self.index.commit(' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
             print("INFO: Doing a git push...", file=sys.stderr)             
-            print(self.repo.git.push(), file=sys.stderr)
+            info = self.origin.push()[0]
+            print(info.summary, file=sys.stderr)
         except git.exc.GitCommandError, e:
             print(str(e), file=sys.stderr)
         except Exception:
             global _abort
             _abort = True
             raise
+        else:
+            print("INFO: Finished git push.", file=sys.stderr)
 
 
 class CurrentCost(threading.Thread):
