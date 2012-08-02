@@ -464,8 +464,8 @@ class _PushToGit(threading.Thread):
             # pull to make sure we're up to date otherwise
             # push will fail.            
             print("INFO: Doing a git pull...", file=sys.stderr)
-            progress = _GitRemoteProgress()
-            info = self.origin.pull(None, progress)[0]             
+            progresssss = _GitRemoteProgress()
+            info = self.origin.pull(None, progresssss)[0]             
             print(info.note, file=sys.stderr)             
             print("INFO: Doing a git add...", file=sys.stderr)             
             print(self.index.add([_directory + '*.dat']), file=sys.stderr)
