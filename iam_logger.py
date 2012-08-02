@@ -417,6 +417,10 @@ class _PushToGit(threading.Thread):
             self.repo = git.Repo(_directory)
         except git.exc.GitCommandError, e:
             print(str(e), file=sys.stderr)
+        except Exception:
+            global _abort
+            _abort = True
+            raise
         else:
             print("INFO: Initialised git repo.", file=sys.stderr)                 
     
@@ -440,13 +444,21 @@ class _PushToGit(threading.Thread):
         try:
             # pull to make sure we're up to date otherwise
             # push will fail.            
+            print("INFO: Doing a git pull...", file=sys.stderr)             
             print(self.repo.git.pull(), file=sys.stderr)             
+            print("INFO: Doing a git add...", file=sys.stderr)             
             print(self.repo.git.add('.'), file=sys.stderr)
             hostname = os.uname()[1]
+            print("INFO: Doing a git commit...", file=sys.stderr)             
             print(self.repo.git.commit(m=' Automatic upload from {}.'.format(hostname)), file=sys.stderr)
+            print("INFO: Doing a git push...", file=sys.stderr)             
             print(self.repo.git.push(), file=sys.stderr)
         except git.exc.GitCommandError, e:
             print(str(e), file=sys.stderr)
+        except Exception:
+            global _abort
+            _abort = True
+            raise
 
 
 class CurrentCost(threading.Thread):
