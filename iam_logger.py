@@ -9,6 +9,7 @@ from __future__ import print_function, division
 import serial # for pulling data from Current Cost
 import xml.etree.ElementTree as ET # for XML parsing
 import time
+import datetime
 import sys
 import os
 import argparse
@@ -394,9 +395,14 @@ class Sensor(object):
         timecode = int(round(self.time_info.last_seen))
         
         # First check to see if we've already written this to disk 
-        # (possibly because multiple _current cost monitors hear this sensor)
+        # (possibly because multiple _current cost monitors hear this sensor,
+        # but can also occur when the computer fails to receive serial
+        # data as soon as it's available, for example if the computer
+        # is heavily loaded with another task.  I could try to work around
+        # this problem by somehow using the timecode from the CC when
+        # the timecode from the computer makes little sense.)
         if timecode == self._last_timecode_written_to_disk:
-            logging.info("SENSOR: Timecode {} already written to disk. "
+            logging.warning("SENSOR: Timecode {} already written to disk. "
                          "Label={}, watts={}, location={}"
                          .format(timecode, self.label,
                                  self.watts, self.location))
@@ -552,7 +558,7 @@ class _PushToGit(threading.Thread):
             # push will fail.            
             logging.info("GIT: Starting git pull. If we get stuck here then "
                          "ensure that\n"
-                         "       git pull can be executed without a password.")
+                         "        git pull can be executed without a password.")
             info = self.origin.pull()[0]
             logging.info("GIT: pull response: {}".format(info.note))            
             logging.info("GIT: running git add...")             
@@ -570,8 +576,12 @@ class _PushToGit(threading.Thread):
             _abort = True
             raise
         else:
+            next_run_time = ((datetime.datetime.now() +
+                              datetime.timedelta(seconds=_git_update_period))
+                              .strftime('%H:%M:%S'))
             logging.info("GIT: Finished git push.  Will run again in "
-                         "{} seconds time.\n".format(_git_update_period))
+                         "{} seconds time at {}.\n"
+                         .format(_git_update_period, next_run_time))
 
 
 class CurrentCost(threading.Thread):
