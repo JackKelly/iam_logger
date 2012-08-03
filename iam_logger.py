@@ -198,10 +198,6 @@ def _alarm_handler(signal_number, frame):
 # CLASSES
 #==============================================================================
 
-class LogFile(object):
-    def __init__(self):
-        self.logfile = open("log.txt", "w")
-
 
 class IAMLoggerError(Exception):
     """Base class for errors in iam_logger."""
@@ -492,7 +488,7 @@ class Manager(object):
                                    .format(currentCost.port))
             currentCost.join()
             
-        print_to_stdout_and_log("Done.")
+        print_to_stdout_and_log("Done.\n\n")
             
     def __str__(self):
         string = ""             
@@ -867,7 +863,7 @@ def main():
                         format='%(asctime)s level=%(levelname)s: '
                         'function=%(funcName)s, thread=%(threadName)s'
                         '\n   %(message)s')
-    logging.debug('MAIN: iam_logger.py starting up.')
+    logging.debug('\nMAIN: iam_logger.py starting up.')
 
     # Check if iam_logger.py is being run using nohup
     if not os.isatty(sys.stdout.fileno()):
