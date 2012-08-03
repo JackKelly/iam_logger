@@ -550,9 +550,9 @@ class _PushToGit(threading.Thread):
         try:
             # pull to make sure we're up to date otherwise
             # push will fail.            
-            logging.info("GIT: Starting git pull. If we get stuck here then\n"
-                         "     check that git pull can be executed\n"
-                         "     without any passwords.")
+            logging.info("GIT: Starting git pull. If we get stuck here then "
+                         "ensure that\n"
+                         "       git pull can be executed without a password.")
             info = self.origin.pull()[0]
             logging.info("GIT: pull response: {}".format(info.note))            
             logging.info("GIT: running git add...")             
@@ -564,14 +564,14 @@ class _PushToGit(threading.Thread):
             logging.info("GIT: commit response: {}".format(response))
             logging.info("GIT: running git push...")             
             info = self.origin.push()[0]
-            logging.info("GIT: push response: {}".format(info.summary))
+            logging.info("GIT: push response: {}".format(info.summary.strip()))
         except Exception:
             global _abort            
             _abort = True
             raise
         else:
             logging.info("GIT: Finished git push.  Will run again in "
-                         "{} seconds time.".format(_git_update_period))
+                         "{} seconds time.\n".format(_git_update_period))
 
 
 class CurrentCost(threading.Thread):
