@@ -1,10 +1,9 @@
 .project
 .pydevproject
 config.xml
-errors.txt
 data/
 nohup.out
 stats.dat
 *.pyc
-radioIDs_override.dat
+radioIDs.dat
 iam_logger.log
