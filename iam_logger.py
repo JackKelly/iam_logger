@@ -132,7 +132,7 @@ def load_radio_id_mapping(filename):
 
         radio_ids = [] # used to check for duplicate radio IDs
         channels = [] # used to check for duplicate channel numbers
-        channel_map = {} # map channel to label (for creating labels.dat)
+        labels = {} # map channel to label (for creating labels.dat)
 
         for line in lines:
             partition = line.partition('#') # ignore comments
@@ -144,7 +144,7 @@ def load_radio_id_mapping(filename):
                                                        channel, label)
                 radio_ids.append(radio_id)
                 channels.append(channel)
-                channel_map[channel] = label
+                labels[channel] = label
                 
             if len(fields) == 4 and fields[3] == 'NEVER_ZERO':
                 CurrentCost.sensors[radio_id].never_zero = True;
@@ -157,13 +157,40 @@ def load_radio_id_mapping(filename):
             raise
         
         # Write labels.dat file to disk
-        labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
-        channel_keys = channel_map.keys()
-        channel_keys.sort()
-        for channel_key in channel_keys:
-            labels_fh.write('{} {}\n'.format(channel_key, 
-                                             channel_map[channel_key]))
-        labels_fh.close()
+        # First check if file exists
+        labels_filename = _directory + 'labels.dat'
+        existing_labels = {}
+        try:
+            labels_fh = open(labels_filename, 'r')
+        except IOError:
+            logging.info(labels_filename + ' does not yet exist. Will create.')
+        else:
+            lines = labels_fh.readlines()
+            labels_fh.close()
+            for line in lines:
+                channel, label = line.split()
+                existing_labels[channel] = label
+                
+        # Merge existing_labels with labels if necessary
+        if labels == existing_labels:
+            logging.info("Existing labels.dat file already contains all "
+                         "necessary labels so not writing to labels.dat.")
+            # don't write to labels.dat
+        else:
+            if existing_labels != {}:
+                logging.info("existing labels.dat is not empty and it isn't "
+                             "the same as new labels so merging the two.")
+                for e_channel, e_label in existing_labels.iteritems():
+                    labels[e_channel] = e_label
+
+            logging.info("Writing {} to disk.".format(labels_filename))                    
+            labels_fh = open(labels_filename, 'w') # fh = file handle
+            channels = labels.keys()
+            channels.sort()
+            for channel_key in channels:
+                labels_fh.write('{} {}\n'.format(channel_key, 
+                                                 labels[channel_key]))
+            labels_fh.close()
     
 
 def _abort_now(exception=None, notify_git=True):
