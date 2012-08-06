@@ -2,12 +2,12 @@
 
 from __future__ import print_function, division
 import time
-import sys
 import logging
 import subprocess
 import os
 import smtplib
 from email.mime.text import MIMEText
+from abc import ABCMeta, abstractproperty, abstractmethod
 
 """
 
@@ -34,11 +34,43 @@ TODO: attach log to email.
 
 """
 
-class Process(object):
+class Checker:
+    """Abstract base class (ABC) for classes which check on the state of
+    a particular part of the system. """
+    
+    
+    __metaclass__ = ABCMeta
+
+    FAIL = 0
+    OK = 1
 
     def __init__(self, name):
         self.name = name
-        self.existed_last_time_checked = self.exists
+        self.last_state = self.state
+
+    @abstractproperty
+    def state(self):
+        pass
+    
+    @property
+    def state_as_str(self):
+        return ['FAIL', 'OK'][self.state]
+    
+    @property
+    def just_changed_state(self):
+        state = self.state # cache to avoid this changing under us        
+        if state == self.last_state:
+            return False
+        else:
+            logging.info('state change: {}'.format(self))
+            self.last_state = state
+            return True
+    
+    def __str__(self):
+        return '{} = {}'.format(self.name, self.state_as_str)
+    
+
+class Process(Checker):
 
     @property
     def pid(self):
@@ -50,66 +82,40 @@ class Process(object):
         try:
             subprocess.Popen(self.restart_command.split())
         except Exception:
-            logging.warning("Failed to restart {}".format(self.name))
-            logging.exception("")
+            logging.exception("Failed to restart. {}".format(self))
         else:
-            logging.info("Successfully restarted {}".format(self.name))
+            logging.info("Successfully restarted. {}".format(self) )
 
     @property
-    def exists(self):
+    def state(self):
         try:
             self.pid
         except subprocess.CalledProcessError:
-            return False
+            return Checker.FAIL
         else:
-            return True
-        
-    def has_just_failed(self):
-        if (not self.exists) and self.existed_last_time_checked:
-            logging.warning("{} has just failed.".format(self.name))
-            response = True
-        else:
-            response = False
-        
-        self.existed_last_time_checked = self.exists
-        return response
-    
-    def __str__(self):
-        return "process '{}' exists = {}".format(
-                self.name, self.exists)
+            return Checker.OK
 
 
-class File(object):
-    def __init__(self, filename, threshold=120):
+class File(Checker):
+    def __init__(self, name, threshold=120):
         """File constructor
         
         Args:
-            filename = including full path
+            name = including full path
             threshold = time in seconds after which this file is considered 
                 overdue
         """
-        self.filename = filename
         self.threshold = threshold
-        self.last_overdue_state = self.overdue
-        
-    @property
-    def just_overdue(self):
-        """Has the file only just recently become overdue?"""
-        overdue = self.overdue
-        if not self.last_overdue_state and self.overdue:
-            response = True
-            logging.warning("{} has not been modified for {:.1f}s".format(
-                                 self.filename, self.seconds_since_modified))
-            
-        else:
-            response = False
-            
-        self.last_overdue_state = overdue
-        return response
+        super(File, self).__init__(name)
 
     @property
-    def overdue(self):
-        return self.seconds_since_modified > self.threshold
+    def state(self):
+        return self.seconds_since_modified < self.threshold
+
+    @property
+    def message(self):
+        return "{} was last modified {:.1f}s ago".format(
+                        self.name, self.seconds_since_modified)        
 
     @property
     def seconds_since_modified(self):
@@ -117,12 +123,13 @@ class File(object):
 
     @property        
     def last_modified(self):
-        return os.path.getmtime(self.filename)
+        return os.path.getmtime(self.name)
     
-    @property
-    def filesize(self):
-        return os.path.getsize(self.filename)
-
+    def __str__(self):
+        msg = super(File, self).__str__()
+        msg += " last modified {:.1f}s ago".format(self.seconds_since_modified)
+        return msg
+    
 
 def send_email(body, subject):
     hostname = os.uname()[1]
@@ -166,10 +173,9 @@ def main():
     iam_logger.restart_command = 'nohup ./iam_logger.py'
     ntpd = Process('ntpd')
     ntpd.restart_command = 'sudo service ntp restart'
-    processes = [iam_logger, ntpd]
+    checkers = [iam_logger, ntpd]
     
-    files = []
-    files.append(File('/home/jack/workingcopies/domesticPowerData/BellendenRd/version2',
+    checkers.append(File('/home/jack/workingcopies/domesticPowerData/BellendenRd/version2/channel_99.dat',
                       200))
     
     send_email(body="IAM logger babysitter running.\n{}\n{}".format(iam_logger, ntpd),
@@ -177,20 +183,15 @@ def main():
     
     while True:
         msg = ""
-        for process in processes:
-            if process.has_just_failed():
-                msg += "{} had just failed\n".format(process.name)
-                msg += "Attempting to restart...\n"
-                process.restart()
-                time.sleep(5)
-                msg += "Attempted to restart {}.  New run state = {}.\n".format(
-                        process.name, process.exists)
-                
-        for f in files:
-            if f.just_overdue:
-                msg += "{} has not been modified for {:.1f}s".format(
-                                 f.filename, f.seconds_since_modified)
-        
+        for checker in checkers:
+            if checker.just_changed_state:
+                msg += str(checker) + "\n"
+                if isinstance(checker, Process):
+                    msg += "Attempting to restart...\n"
+                    checker.restart()
+                    time.sleep(5)
+                    msg += str(checker) + "\n"
+                            
         if msg != "":
             send_email(body=msg, subject="iam_logger errors.")
     
