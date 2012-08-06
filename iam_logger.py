@@ -602,10 +602,10 @@ class _PushToGit(threading.Thread):
             try:
                 self._git_push()
             except Exception:
-                logging.exception("GIT exception.  Will not reset alarm.")
-            else:
-                signal.alarm(_git_update_period)
-                self._try_to_release()
+                logging.exception("GIT exception.")
+
+            signal.alarm(_git_update_period)
+            self._try_to_release()
         
         self._try_to_release()
             
