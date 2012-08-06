@@ -588,7 +588,7 @@ class _PushToGit(threading.Thread):
         try:
             self._git_push() # do a git push at start-up
         except Exception:
-            logging.exception()
+            logging.exception("")
             
         while not _abort:
             # _git_condition_variable will be notified when SIGALRM fires.
