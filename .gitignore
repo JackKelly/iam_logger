@@ -7,3 +7,4 @@ stats.dat
 *.pyc
 radioIDs.dat
 iam_logger.log
+babysitter.log
