@@ -102,12 +102,11 @@ def load_config():
         current_costs.append(CurrentCost(serial_port.text))
         
     load_radio_id_mapping('radioIDs.dat')
-    load_radio_id_mapping('radioIDs_override.dat', save_labels_dat=False)
 
     return current_costs
 
 
-def load_radio_id_mapping(filename, save_labels_dat=True):
+def load_radio_id_mapping(filename):
     """Loads and processes radioIDs.dat or radioIDs_override.dat.
     
     Saves mapping from radio IDs to sensors in CurrentCost.sensors dict.
@@ -117,11 +116,6 @@ def load_radio_id_mapping(filename, save_labels_dat=True):
     
     Args:
         filename (str): the filename to load.  e.g. "radioIDs.dat"
-        
-    Kwargs:
-        save_labels_dat (bool): If True then write a _directory/labels.dat
-        file which maps channel number to label as per the original
-        REDD file format.
 
     Raises:
         IAMLoggerError: if duplicate channels or radioIDs are found
@@ -143,14 +137,17 @@ def load_radio_id_mapping(filename, save_labels_dat=True):
         for line in lines:
             partition = line.partition('#') # ignore comments
             fields = partition[0].strip().split()
-            if len(fields) == 3:
-                channel, label, radio_id = fields
+            if len(fields) == 3 or len(fields) == 4:
+                channel, label, radio_id = fields[:3]
                 radio_id = int(radio_id)
                 CurrentCost.sensors[radio_id] = Sensor(radio_id, 
                                                        channel, label)
                 radio_ids.append(radio_id)
                 channels.append(channel)
                 channel_map[channel] = label
+                
+            if len(fields) == 4 and fields[3] == 'NEVER_ZERO':
+                CurrentCost.sensors[radio_id].never_zero = True;
 
         try:                        
             check_for_duplicates(radio_ids, 'radio_ids in {}'.format(filename))
@@ -160,14 +157,13 @@ def load_radio_id_mapping(filename, save_labels_dat=True):
             raise
         
         # Write labels.dat file to disk
-        if save_labels_dat:
-            labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
-            channel_keys = channel_map.keys()
-            channel_keys.sort()
-            for channel_key in channel_keys:
-                labels_fh.write('{} {}\n'.format(channel_key, 
+        labels_fh = open(_directory + 'labels.dat', 'w') # fh = file handle
+        channel_keys = channel_map.keys()
+        channel_keys.sort()
+        for channel_key in channel_keys:
+            labels_fh.write('{} {}\n'.format(channel_key, 
                                              channel_map[channel_key]))
-            labels_fh.close()
+        labels_fh.close()
     
 
 def _abort_now(exception=None, notify_git=True):
@@ -334,6 +330,10 @@ class Sensor(object):
             (taken from radioIDs.dat).
             
         watts (int): instantaneous power measured in watts.
+        
+        never_zero (bool): True if this sensor's measurement can never be zero.
+            Default = False.  Useful for aggregate sensors.  Sometimes the CC
+            records an aggregate reading of zero, which is clearly wrong.
     
     """
     
@@ -366,6 +366,7 @@ class Sensor(object):
         self.label = label
         self.watts = '-'
         self._last_timecode_written_to_disk = None
+        self.never_zero = False
 
     def update(self, watts, cc_channel, current_cost):
         """Process a new sample.
@@ -383,6 +384,13 @@ class Sensor(object):
                 appears on
         
         """
+        
+        # Sometimes the Current Cost incorrectly claims the aggregate power
+        # consumption is 0 watts.  This is incredibly unlikely so if this
+        # happens then assume this is an error and ignore.
+        if self.never_zero and watts == 0:
+            return
+        
         self.time_info.update()
         self.watts = watts
         self.location = Location(cc_channel, current_cost) 
@@ -395,7 +403,11 @@ class Sensor(object):
         self.write_to_disk()
 
     def __str__(self):
-        return Sensor._STR_FORMAT.format(self.label, self.channel,
+        if self.never_zero:
+            label = "*" + self.label
+        else:
+            label = self.label
+        return Sensor._STR_FORMAT.format(label, self.channel,
                                        self.location.cc_channel, self.watts, 
                                        self.time_info, self.radio_id, 
                                        self.locations) 
@@ -533,6 +545,14 @@ class _PushToGit(threading.Thread):
         else:
             logging.info("GIT: repo {}".format(_directory))                 
     
+    def _try_to_release(self):
+        try:
+            _git_condition_variable.release()
+        except RuntimeError, e: # "cannot release un-acquired lock"
+            logging.info("Ignoring exception while trying to release git "
+                         "condition variable: " + str(e))
+            pass # we don't care if we haven't acquired lock yet
+    
     def run(self):
         self._git_push() # do a git push at start-up
         while not _abort:
@@ -542,20 +562,20 @@ class _PushToGit(threading.Thread):
             _git_condition_variable.wait()
             
             if _abort:
-                _git_condition_variable.release()
+                self._try_to_release()
                 break
             
             try:
                 self._git_push()
             except Exception:
-                _git_condition_variable.release()                
+                self._try_to_release()
                 break
                 raise
             else:
                 signal.alarm(_git_update_period)
-                _git_condition_variable.release()
+                self._try_to_release()
         
-        _git_condition_variable.release()
+        self._try_to_release()
             
     def _git_push(self):
         """Push to git remote (e.g. github)."""
@@ -879,7 +899,8 @@ def main():
                         format='%(asctime)s level=%(levelname)s: '
                         'function=%(funcName)s, thread=%(threadName)s'
                         '\n   %(message)s')
-    logging.debug('\nMAIN: iam_logger.py starting up.')
+    logging.debug('\nMAIN: iam_logger.py starting up. Unixtime = {:.0f}'
+                  .format(time.time()))
 
     # Check if iam_logger.py is being run using nohup
     if not os.isatty(sys.stdout.fileno()):
@@ -915,7 +936,8 @@ def main():
     
     print_to_stdout_and_log("Waiting for git thread to stop...")                 
     git_push.join()
-    print_to_stdout_and_log("Done.\n\n")             
+    print_to_stdout_and_log("Done. Unixtime = {:.0f}\n\n"
+                            .format(time.time()))             
 
 if __name__ == "__main__":
     main()
