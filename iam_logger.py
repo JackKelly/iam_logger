@@ -23,11 +23,10 @@ except Exception, e:
           "`sudo easy_install gitpython`.", file=sys.stderr)
     raise 
 
-# TODO: If aggregate reading is 0 then discard that reading.
-
 # TODO: Write a script to check sync between aggregate files on both computers
 
 # TODO: Script which checks that certain files are being updated and emails me if not.
+# Should also check than ntp is running.
 
 # TODO: Get old laptop running in office for logging.
 
@@ -550,7 +549,12 @@ class Manager(object):
 #==============================================================================
 
 class _PushToGit(threading.Thread):
-    """Simple little thread for pushing files to git."""
+    """Simple little thread for pushing files to git.
+    
+    Will only terminate rest of program if git.Repo() fails.  If an error 
+    occurs later then exception info will be logged but _PushToGit won't
+    try to bring down the entire iam_logger app.
+    """
     
     # GitPython tutorial here:
     # http://packages.python.org/GitPython/0.3.2/tutorial.html
@@ -581,7 +585,11 @@ class _PushToGit(threading.Thread):
             pass # we don't care if we haven't acquired lock yet
     
     def run(self):
-        self._git_push() # do a git push at start-up
+        try:
+            self._git_push() # do a git push at start-up
+        except Exception:
+            logging.exception()
+            
         while not _abort:
             # _git_condition_variable will be notified when SIGALRM fires.
             # (this is the mechanism by which we periodically push to git)
@@ -595,9 +603,7 @@ class _PushToGit(threading.Thread):
             try:
                 self._git_push()
             except Exception:
-                self._try_to_release()
-                break
-                raise
+                logging.exception("GIT exception.  Will not reset alarm.")
             else:
                 signal.alarm(_git_update_period)
                 self._try_to_release()
