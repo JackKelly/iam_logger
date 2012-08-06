@@ -25,9 +25,8 @@ without requiring a password.  Enable this by:
 """
 
 """
-TODO: attempt to re-start processes several times; wait; check again
-
-TODO: check that files continue to grow
+TODO: take in config options for files to monitor, processes etc... or at least
+      make it clearer where to modify these consts.
 
 TODO: check disk space!
 
@@ -80,6 +79,51 @@ class Process(object):
                 self.name, self.exists)
 
 
+class File(object):
+    def __init__(self, filename, threshold=120):
+        """File constructor
+        
+        Args:
+            filename = including full path
+            threshold = time in seconds after which this file is considered 
+                overdue
+        """
+        self.filename = filename
+        self.threshold = threshold
+        self.last_overdue_state = self.overdue
+        
+    @property
+    def just_overdue(self):
+        """Has the file only just recently become overdue?"""
+        overdue = self.overdue
+        if not self.last_overdue_state and self.overdue:
+            response = True
+            logging.warning("{} has not been modified for {:.1f}s".format(
+                                 self.filename, self.seconds_since_modified))
+            
+        else:
+            response = False
+            
+        self.last_overdue_state = overdue
+        return response
+
+    @property
+    def overdue(self):
+        return self.seconds_since_modified > self.threshold
+
+    @property
+    def seconds_since_modified(self):
+        return time.time() - self.last_modified
+
+    @property        
+    def last_modified(self):
+        return os.path.getmtime(self.filename)
+    
+    @property
+    def filesize(self):
+        return os.path.getsize(self.filename)
+
+
 def send_email(body, subject):
     hostname = os.uname()[1]
     me = hostname + '<jack-list@xlk.org.uk>'
@@ -124,13 +168,16 @@ def main():
     ntpd.restart_command = 'sudo service ntp restart'
     processes = [iam_logger, ntpd]
     
-    send_email(body="IAM logger babysitter running.",
+    files = []
+    files.append(File('/home/jack/workingcopies/domesticPowerData/BellendenRd/version2',
+                      200))
+    
+    send_email(body="IAM logger babysitter running.\n{}\n{}".format(iam_logger, ntpd),
                subject="babysitter.py running")
     
     while True:
         msg = ""
         for process in processes:
-            print(process)
             if process.has_just_failed():
                 msg += "{} had just failed\n".format(process.name)
                 msg += "Attempting to restart...\n"
@@ -138,6 +185,11 @@ def main():
                 time.sleep(5)
                 msg += "Attempted to restart {}.  New run state = {}.\n".format(
                         process.name, process.exists)
+                
+        for f in files:
+            if f.just_overdue:
+                msg += "{} has not been modified for {:.1f}s".format(
+                                 f.filename, f.seconds_since_modified)
         
         if msg != "":
             send_email(body=msg, subject="iam_logger errors.")
