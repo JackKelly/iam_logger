@@ -164,11 +164,14 @@ def load_radio_id_mapping(filename):
         except IOError:
             logging.info(labels_filename + ' does not yet exist. Will create.')
         else:
+            # Load existing labels.dat file
             lines = labels_fh.readlines()
             labels_fh.close()
             for line in lines:
-                channel, label = line.split()
-                existing_labels[channel] = label
+                fields = line.split()
+                if len(fields) == 2:
+                    channel, label = fields
+                    existing_labels[channel] = label
                 
         # Merge existing_labels with labels if necessary
         if labels == existing_labels:
@@ -180,7 +183,8 @@ def load_radio_id_mapping(filename):
                 logging.info("existing labels.dat is not empty and it isn't "
                              "the same as new labels so merging the two.")
                 for e_channel, e_label in existing_labels.iteritems():
-                    labels[e_channel] = e_label
+                    if e_channel not in labels.keys():
+                        labels[e_channel] = e_label
 
             logging.info("Writing {} to disk.".format(labels_filename))                    
             labels_fh = open(labels_filename, 'w') # fh = file handle
