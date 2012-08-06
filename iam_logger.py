@@ -597,7 +597,6 @@ class _PushToGit(threading.Thread):
             _git_condition_variable.wait()
             
             if _abort:
-                self._try_to_release()
                 break
             
             try:
@@ -635,8 +634,7 @@ class _PushToGit(threading.Thread):
             logging.info("GIT: _git_push caught IndexError. This is probably "
                          "because we're trying to terminate\n"
                          "       while git push is running: " + str(e))
-        except Exception, e:
-            _abort_now(exception=e, notify_git=False)
+        except Exception:
             raise
         else:
             next_run_time = ((datetime.datetime.now() +
