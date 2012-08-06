@@ -23,7 +23,7 @@ except Exception, e:
           "`sudo easy_install gitpython`.", file=sys.stderr)
     raise 
 
-# TODO: Order new current cost and some more IAMs (check blog)
+# TODO: If aggregate reading is 0 then discard that reading.
 
 # TODO: Write a script to check sync between aggregate files on both computers
 
@@ -170,6 +170,18 @@ def load_radio_id_mapping(filename, save_labels_dat=True):
             labels_fh.close()
     
 
+def _abort_now(exception=None, notify_git=True):
+    if exception is not None:
+        print_to_stdout_and_log(str(exception), logging.CRITICAL )
+    
+    print_to_stdout_and_log("Aborting...")        
+    global _abort
+    _abort = True
+
+    if notify_git:
+        _notify_git()    
+
+
 def _signal_handler(signal_number, frame):
     """Handle SIGINT and SIGTERM.
     
@@ -180,12 +192,11 @@ def _signal_handler(signal_number, frame):
     signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
     print_to_stdout_and_log("\nSignal {} received."
                                      .format(signal_names[signal_number]))
-    global _abort
-    _abort = True
-    _notify_git()
+    _abort_now()
 
 
 def _notify_git():
+    logging.debug("Notifying git")
     _git_condition_variable.acquire()
     _git_condition_variable.notify()
     _git_condition_variable.release()    
@@ -479,22 +490,13 @@ class Manager(object):
         for every CurrentCost to return from its last blocked read.
         
         """
-           
-        global _abort
-        _abort = True
-        
-        _notify_git()        
-        
-        print_to_stdout_and_log("Stopping...")
 
         # Don't exit the main thread until our
         # worker CurrentCost threads have all quit
         for currentCost in self.current_costs:
             print_to_stdout_and_log("Waiting for monitor {} to stop..."
                                    .format(currentCost.port))
-            currentCost.join()
-            
-        print_to_stdout_and_log("Done.\n\n")
+            currentCost.join()        
             
     def __str__(self):
         string = ""             
@@ -525,30 +527,35 @@ class _PushToGit(threading.Thread):
             self.repo = git.Repo(_directory)
             self.origin = self.repo.remotes.origin
             self.index = self.repo.index
-        except Exception:
-            global _abort
-            _abort = True
+        except Exception, e:
+            _abort_now(exception=e, notify_git=False)
             raise
         else:
             logging.info("GIT: repo {}".format(_directory))                 
     
     def run(self):
         self._git_push() # do a git push at start-up
-        while True:
+        while not _abort:
+            # _git_condition_variable will be notified when SIGALRM fires.
+            # (this is the mechanism by which we periodically push to git)
             _git_condition_variable.acquire()
             _git_condition_variable.wait()
             
             if _abort:
-                _git_condition_variable.release()                
+                _git_condition_variable.release()
                 break
+            
             try:
                 self._git_push()
             except Exception:
                 _git_condition_variable.release()                
                 break
                 raise
-            signal.alarm(_git_update_period)
-            _git_condition_variable.release()
+            else:
+                signal.alarm(_git_update_period)
+                _git_condition_variable.release()
+        
+        _git_condition_variable.release()
             
     def _git_push(self):
         """Push to git remote (e.g. github)."""
@@ -571,9 +578,12 @@ class _PushToGit(threading.Thread):
             logging.info("GIT: running git push...")             
             info = self.origin.push()[0]
             logging.info("GIT: push response: {}".format(info.summary.strip()))
-        except Exception:
-            global _abort            
-            _abort = True
+        except IndexError, e:
+            logging.info("GIT: _git_push caught IndexError. This is probably "
+                         "because we're trying to terminate\n"
+                         "       while git push is running: " + str(e))
+        except Exception, e:
+            _abort_now(exception=e, notify_git=False)
             raise
         else:
             next_run_time = ((datetime.datetime.now() +
@@ -623,9 +633,8 @@ class CurrentCost(threading.Thread):
 
         try:
             self._open_port()
-        except (OSError, serial.SerialException):
-            global _abort            
-            _abort = True
+        except (OSError, serial.SerialException), e:
+            _abort_now(exception=e)
             raise
         
         self._get_info()
@@ -665,7 +674,6 @@ class CurrentCost(threading.Thread):
     def run(self):
         """This is what the threading framework runs."""
         
-        global _abort
         try:
             if self.print_xml: # Just print XML to the screen
                 while not _abort:
@@ -673,8 +681,8 @@ class CurrentCost(threading.Thread):
             else:            
                 while not _abort:
                     self.update()
-        except Exception: # catch any exception
-            _abort = True
+        except Exception, e: # catch any exception
+            _abort_now(exception=e)
             raise
     
     def readline(self):
@@ -776,8 +784,6 @@ class CurrentCost(threading.Thread):
                                 
         
         # If we get to here then we have failed after every retry    
-        global _abort
-        _abort = True
         raise IAMLoggerError('read_xml failed after {} retries'
                              .format(CurrentCost.MAX_RETRIES))
 
@@ -905,7 +911,11 @@ def main():
         manager.run()
     except Exception:
         manager.stop()
-        raise                
+        raise
+    
+    print_to_stdout_and_log("Waiting for git thread to stop...")                 
+    git_push.join()
+    print_to_stdout_and_log("Done.\n\n")             
 
 if __name__ == "__main__":
     main()
