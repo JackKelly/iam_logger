@@ -131,7 +131,7 @@ def load_radio_id_mapping(filename):
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
 
-        radio_ids = [] # used to check for duplicate radio IDs
+        radio_ids_and_s_chans = [] # used to check for duplicate radio IDs
         channels = [] # used to check for duplicate channel numbers
         labels = {} # map channel to label (for creating labels.dat)
 
@@ -139,19 +139,28 @@ def load_radio_id_mapping(filename):
             partition = line.partition('#') # ignore comments
             fields = partition[0].strip().split()
             if len(fields) == 3 or len(fields) == 4:
-                channel, label, radio_id = fields[:3]
+                channel, label, radio_id_and_s_chan = fields[:3]
+                
+                radio_id, dummy, s_chan = radio_id_and_s_chan.partition('/')
+                if s_chan == '':
+                    s_chan = 1
+                
                 radio_id = int(radio_id)
-                CurrentCost.sensors[radio_id] = Sensor(radio_id, 
+                s_chan   = int(s_chan)
+                
+                key = (radio_id, s_chan)
+                
+                CurrentCost.sensors[key] = Sensor(radio_id, 
                                                        channel, label)
-                radio_ids.append(radio_id)
+                radio_ids_and_s_chans.append(key)
                 channels.append(channel)
                 labels[channel] = label
                 
             if len(fields) == 4 and fields[3] == 'NEVER_ZERO':
-                CurrentCost.sensors[radio_id].never_zero = True;
+                CurrentCost.sensors[key].never_zero = True;
 
         try:                        
-            check_for_duplicates(radio_ids, 'radio_ids in {}'.format(filename))
+            check_for_duplicates(radio_ids_and_s_chans, 'radio_ids_and_s_chans in {}'.format(filename))
             check_for_duplicates(channels, 'channels in {}'.format(filename))
         except IAMLoggerError, e: # duplicates found        
             logging.exception(str(e))
@@ -824,21 +833,10 @@ class CurrentCost(threading.Thread):
                 if tree.findtext('hist') is not None:
                     continue
                 
-                # Check if all the elements we're looking for exist in this XML
-                success = True
                 for key in data.keys():
                     data[key] = tree.findtext(key)
-                    if data[key] is None:
-                        success = False
-                        logging.warning("XML: Key \'{}\' not found in XML:\n{}"
-                                        .format(key, line))
-                        break
                     
-                if success:
-                    return data
-                else:
-                    continue
-                                
+                return data                                
         
         # If we get to here then we have failed after every retry    
         raise IAMLoggerError('read_xml failed after {} retries'
@@ -862,28 +860,40 @@ class CurrentCost(threading.Thread):
         """
 
         # For Current Cost XML details, see currentcost.com/cc128/xml.htm
-        data = {'id': None, 'sensor': None, 'ch1/watts': None}
+        data = {'id': None, 'sensor': None, 'ch1/watts': None,
+                'ch2/watts': None, 'ch3/watts': None}
         data = self.read_xml(data)
         # radio_id, hopefully unique to an IAM (but not necessarily unique):
         radio_id   = int(data['id'])
         cc_channel = int(data['sensor']) # channel on this Current Cost
-        watts      = int(data['ch1/watts'])
+        watts      = []
+        watts.append(data['ch1/watts'])
+        watts.append(data['ch2/watts'])
+        watts.append(data['ch3/watts'])
+        
+        # convert watts to ints
+        for i in range(3):
+            if watts[i] is not None:
+                watts[i] = int(watts[i])
         
         lock = threading.Lock()
         
-        if radio_id not in CurrentCost.sensors.keys():
-            logging.info("CURRENTCOST: making new Sensor for radio ID {}"
-                         .format(radio_id))
-            lock.acquire()
-            CurrentCost.sensors[radio_id] = Sensor(radio_id)
-            lock.release()
+        for s_chan in range(1,4): # s_chan = sensor channel (e.g. multiple CT clamps)
+            if watts[s_chan-1] is not None:
+                key = (radio_id, s_chan)
+                if key not in CurrentCost.sensors.keys():
+                    logging.info("CURRENTCOST: making new Sensor for radio ID {} and s_chan {}"
+                         .format(radio_id, s_chan))
+                    lock.acquire()
+                    CurrentCost.sensors[key] = Sensor(radio_id)
+                    lock.release()
         
-        lock.acquire()
-        CurrentCost.sensors[radio_id].update(watts, cc_channel, self)
-        lock.release()
+                lock.acquire()
+                CurrentCost.sensors[key].update(watts[s_chan-1], cc_channel, self)
+                lock.release()
         
-        # Maintain a local dict of sensors connected to this _current cost
-        self.local_sensors[cc_channel] = CurrentCost.sensors[radio_id]
+                # Maintain a local dict of sensors connected to this _current cost
+                self.local_sensors[(cc_channel, s_chan)] = CurrentCost.sensors[key]
 
     def __str__(self):
         string  = "port      = {}\n".format(self.port)        
@@ -892,7 +902,7 @@ class CurrentCost(threading.Thread):
         string += " "*41 + "|---PERIOD STATS (secs)---|\n"
         string += Sensor.HEADERS
         
-        cc_channels = self.local_sensors.keys() # keyed by channel number
+        cc_channels = self.local_sensors.keys() # keyed by (cc_channel number, sensor chan)
         cc_channels.sort()
         
         for cc_channel in cc_channels:
