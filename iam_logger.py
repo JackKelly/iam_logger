@@ -23,10 +23,9 @@ except Exception, e:
           "`sudo easy_install gitpython`.", file=sys.stderr)
     raise 
 
-# TODO: Write a script to check sync between aggregate files on both computers
+# TODO: Display sensor chan in stats
 
-# TODO: Script which checks that certain files are being updated and emails me if not.
-# Should also check than ntp is running.
+# TODO: Write a script to check sync between aggregate files on both computers
 
 # TODO: Get old laptop running in office for logging.
 
