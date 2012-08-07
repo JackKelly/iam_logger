@@ -3,8 +3,12 @@
 config.xml
 data/
 nohup.out
+*.nohup
 stats.dat
 *.pyc
 radioIDs.dat
 iam_logger.log
 babysitter.log
+babysitter_config.xml
+*.*~
+
