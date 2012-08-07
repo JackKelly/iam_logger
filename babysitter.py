@@ -138,6 +138,9 @@ class Process(Checker):
             logger.info("No restart string for {}".format(self.name))
             return
         
+        if self.state == Checker.OK:
+            return
+        
         logger.info("Attempting to restart {}".format(self.name))
         try:
             subprocess.Popen(self.restart_command.split())
