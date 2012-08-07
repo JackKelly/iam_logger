@@ -2,7 +2,7 @@
 
 from __future__ import print_function, division
 import time
-import logging.handlers
+import logging
 import subprocess
 import os
 import smtplib
@@ -10,34 +10,77 @@ from email.mime.text import MIMEText
 from abc import ABCMeta, abstractproperty
 import xml.etree.ElementTree as ET # for XML parsing
 import signal
-import sys
 
 """
+***********************************
+********* DESCRIPTION *************
+    
+    Script for monitoring disk space, multiple files and multiple processes.
+    If errors are found then an email is sent.
+    Configuration is stored in a babysitter_config.xml file (see below)
+     
 
-Requirements:
+***********************************
+********* REQUIREMENTS ************
 
-**********************************
-SETUP SUDO FOR service restart ntp
-**********************************
-This Python script needs to be able to run 'service restart ntp'
-without requiring a password.  Enable this by:
-1. run 'sudo visudo'
-2. add the following line: 'USER    ALL=NOPASSWD: /usr/sbin/service ntp *'
-   (replace USER with your username!) 
+    ---------------------------------
+    ADD A babysitter_config.xml FILE
+    USING THE FOLLOWING FORMAT:
+    
+    Add as many <process> or <file>
+    elements as you want to check.
+    --------------------------------
+
+        <config>
+        
+            <smtp_server></smtp_server>
+            <email_from></email_from>
+            <email_to></email_to>
+            <username></username>
+            <password></password>
+            
+            <disk_space_threshold>20</disk_space_threshold> <!-- MBytes -->
+            
+            <file>
+                <location></location>
+                <timeout>300</timeout> <!-- Seconds -->
+            </file>
+        
+            <process>
+                <name>iam_logger.py</name>
+                <restart_command>nohup ./iam_logger.py</restart_command>
+            </process>
+        
+            <process>
+                <name>ntpd</name>
+                <restart_command>sudo service ntp restart</restart_command>
+            </process>
+            
+        </config>
+    
+    
+    ----------------------------------
+    SETUP SUDO FOR service restart ntp
+    ----------------------------------
+        
+        This Python script needs to be able to run 'service restart ntp'
+        without requiring a password.  Follow these steps:
+        
+        1. run 'sudo visudo'
+        2. add the following line: 
+           'USER   ALL=NOPASSWD: /usr/sbin/service ntp *'
+           (replace USER with your unix username!) 
 
 """
-
-# TODO: check disk space!
-# TODO: attach log to email.
 
 
 class Checker:
     """Abstract base class (ABC) for classes which check on the state of
-    a particular part of the system. """
-    
+    a particular part of the system. """    
     
     __metaclass__ = ABCMeta
 
+    # Define some constants for tracking state
     FAIL = 0
     OK = 1
 
@@ -69,8 +112,19 @@ class Checker:
     
 
 class Process(Checker):
+    """Class for monitoring a unix process.
+    
+    Attributes:
+        name (str): the process name as it appears in `ps -A`
+        restart_string (str): the command used to restart this process            
+    
+    """
 
     def __init__(self, name):
+        """
+        Args:
+            name (str): the process name as it appears in `ps -A`
+        """
         self.restart_string = None
         super(Process, self).__init__(name)
 
@@ -130,17 +184,46 @@ class File(Checker):
         msg = super(File, self).__str__()
         msg += ", last modified {:.1f}s ago.".format(self.seconds_since_modified)
         return msg
+
+
+class DiskSpaceRemaining(Checker):
     
+    def __init__(self, threshold):
+        """
+        Args:
+            threshold (int or str): number of MBytes of free space below which
+                state will change to FAIL.
+        """
+        self.threshold = int(threshold)        
+        super(DiskSpaceRemaining, self).__init__('disk space')
+        
+    @property
+    def state(self):
+        return self.available_space > self.threshold 
+        
+    @property
+    def available_space(self):
+        """Returns available disk space in MBytes."""
+        # From http://stackoverflow.com/a/787832/732596
+        s = os.statvfs('/')
+        return (s.f_bavail * s.f_frsize) / 1024**2      
+    
+    def __str__(self):
+        msg = super(DiskSpaceRemaining, self).__str__()
+        msg += ", remaining={:.0f} MB.".format(self.available_space)
+        return msg    
+
 
 class Manager(object):
-    """Manages multiple Checker objects"""
+    """Manages multiple Checker objects."""
     
     def __init__(self):
         self._checkers = []
         
     def append(self, checker):
         self._checkers.append(checker)
-        logger.info('Added Checker to Manager: {}'.format(self._checkers[-1]))
+        logger.info('Added {} to Manager: {}'.format(checker.__class__.__name__,
+                                                     self._checkers[-1]))
         
     def run(self):
         msg = "IAM logger babysitter running.\n{}".format(self)
@@ -150,6 +233,7 @@ class Manager(object):
             msg = ""
             for checker in self._checkers:
                 if checker.just_changed_state:
+                    msg += "STATE CHANGED:\n"
                     msg += str(checker) + "\n"
                     if isinstance(checker, Process):
                         msg += "Attempting to restart...\n"
@@ -158,6 +242,7 @@ class Manager(object):
                         msg += str(checker) + "\n"
                             
             if msg != "":
+                msg += "CURRENT STATE OF ALL CHECKERS:\n" + str(self)
                 self.send_email(body=msg, subject="iam_logger errors.")
     
             time.sleep(10)
@@ -171,14 +256,21 @@ class Manager(object):
         self.USERNAME    = config_tree.findtext("username")
         self.PASSWORD    = config_tree.findtext("password")
     
-        logger.info('SMTP_SERVER={}\nEMAIL_FROM={}\nEMAIL_TO={}'
+        logger.debug('\nSMTP_SERVER={}\nEMAIL_FROM={}\nEMAIL_TO={}'
                      .format(self.SMTP_SERVER, self.EMAIL_FROM, self.EMAIL_TO))
     
+        # Disk space checker
+        disk_space_threshold = config_tree.findtext("disk_space_threshold")
+        if disk_space_threshold is not None:
+            self.append(DiskSpaceRemaining(disk_space_threshold))
+    
+        # Load files
         files_etree = config_tree.findall("file")
         for f in files_etree:
             self.append(File(f.findtext('location'), 
                              int(f.findtext('timeout'))))
-            
+        
+        # Load processes
         processes_etree = config_tree.findall("process")
         for process in processes_etree:
             p = Process(process.findtext('name'))

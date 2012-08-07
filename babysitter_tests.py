@@ -5,6 +5,7 @@ import StringIO
 class TestLoadConfig(unittest.TestCase):
     
     def setUp(self):
+        babysitter._init_logger()
         self.manager = babysitter.Manager()
         
     def _load_config(self, xml):
@@ -16,14 +17,14 @@ class TestLoadConfig(unittest.TestCase):
         <config>
             <file>
               <location>/tmp</location>
-              <timeout>1000</timeout>
+              <timeout>1000000</timeout>
             </file>
         </config>
         """
         self._load_config(xml)
         self.assertIsInstance(self.manager._checkers[0], babysitter.File)
         self.assertEqual(self.manager._checkers[0].name, '/tmp')
-        self.assertEqual(self.manager._checkers[0].timeout, 1000)
+        self.assertEqual(self.manager._checkers[0].timeout, 1000000)
         self.assertTrue(self.manager._checkers[0].state == babysitter.Checker.OK)        
 
     def test_process(self):
@@ -40,6 +41,17 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(self.manager._checkers[0].name, 'init')
         self.assertEqual(self.manager._checkers[0].restart_command,
                          'sudo service init restart')
+        self.assertTrue(self.manager._checkers[0].state == babysitter.Checker.OK)
+
+    def test_disk_space(self):
+        xml = """
+        <config>
+            <disk_space_threshold>20</disk_space_threshold>            
+        </config>
+        """
+        self._load_config(xml)
+        self.assertIsInstance(self.manager._checkers[0], babysitter.DiskSpaceRemaining)        
+        self.assertEqual(self.manager._checkers[0].threshold, 20)
         self.assertTrue(self.manager._checkers[0].state == babysitter.Checker.OK)
 
     def test_email_config(self):
