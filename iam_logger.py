@@ -47,6 +47,8 @@ _git_condition_variable = threading.Condition()
 def print_to_stdout_and_log(msg, level=logging.INFO):
     print(msg)
     logging.log(level, msg)
+    # Logging messages simultaneously to stdout and log file could
+    # be done by using a child logger
 
 
 def check_for_duplicates(list_, label):
@@ -972,7 +974,8 @@ def main():
     print_to_stdout_and_log("Waiting for git thread to stop...")                 
     git_push.join()
     print_to_stdout_and_log("Done. Unixtime = {:.0f}\n\n"
-                            .format(time.time()))             
+                            .format(time.time()))
+    logging.shutdown()      
 
 if __name__ == "__main__":
     main()
