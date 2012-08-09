@@ -23,7 +23,9 @@ except Exception, e:
           "`sudo easy_install gitpython`.", file=sys.stderr)
     raise 
 
-# TODO: Display sensor chan in stats
+# TODO: Don't use git.  Instead use rsync.  Study computer sends data to 
+# living room computer every 5 mins.  Living room computer draws plots and 
+# sends data to my Site5 account every week. 
 
 # TODO: Write a script to check sync between aggregate files on both computers
 
@@ -130,7 +132,7 @@ def load_radio_id_mapping(filename):
         lines = radio_id_fh.readlines()
         radio_id_fh.close()
 
-        radio_ids_and_s_chans = [] # used to check for duplicate radio IDs
+        radio_ids_and_sens_chans = [] # used to check for duplicate radio IDs
         channels = [] # used to check for duplicate channel numbers
         labels = {} # map channel to label (for creating labels.dat)
 
@@ -138,20 +140,23 @@ def load_radio_id_mapping(filename):
             partition = line.partition('#') # ignore comments
             fields = partition[0].strip().split()
             if len(fields) == 3 or len(fields) == 4:
-                channel, label, radio_id_and_s_chan = fields[:3]
+                channel, label, radio_id_and_sens_chan = fields[:3]
                 
-                radio_id, dummy, s_chan = radio_id_and_s_chan.partition('/')
-                if s_chan == '':
-                    s_chan = 1
+                # "sens_chan" = sensor channel. i.e. <chX/watts> in XML
+                radio_id, dummy, sens_chan = radio_id_and_sens_chan.partition('/')
+                if sens_chan == '':
+                    # default sensor channel if nothing stated in radioIDs.dat
+                    sens_chan = 1 
                 
                 radio_id = int(radio_id)
-                s_chan   = int(s_chan)
+                sens_chan= int(sens_chan)
                 
-                key = (radio_id, s_chan)
+                key = (radio_id, sens_chan)
                 
-                CurrentCost.sensors[key] = Sensor(radio_id, 
-                                                       channel, label)
-                radio_ids_and_s_chans.append(key)
+                CurrentCost.sensors[key] = Sensor(radio_id, sens_chan,
+                                                  channel, label)
+                
+                radio_ids_and_sens_chans.append(key)
                 channels.append(channel)
                 labels[channel] = label
                 
@@ -159,7 +164,7 @@ def load_radio_id_mapping(filename):
                 CurrentCost.sensors[key].never_zero = True;
 
         try:                        
-            check_for_duplicates(radio_ids_and_s_chans, 'radio_ids_and_s_chans in {}'.format(filename))
+            check_for_duplicates(radio_ids_and_sens_chans, 'radio_ids_and_sens_chans in {}'.format(filename))
             check_for_duplicates(channels, 'channels in {}'.format(filename))
         except IAMLoggerError, e: # duplicates found        
             logging.exception(str(e))
@@ -313,28 +318,35 @@ class Location(object):
     """Simple struct for representing the physical 'location' of a sensor.
     
     The 'location'  means the combination of Current Cost instance and 
-    the cc_channel on that CC.
+    the cc_channel on that CC and the sensor channel.
     
     Attributes:
+        sens_chan (int): the sensor channel number.  i.e. the X in <chX>
+            in the CC XML.
+
         cc_channel (int): Current Cost channel.
         
         current_cost (CurrentCost): a CurrentCost object.
     """
        
-    def __init__(self, cc_channel, current_cost):
+    def __init__(self, sens_chan, cc_channel, current_cost):
         """Construct a Location object.
         
         Args:
+            sens_chan (int): the sensor channel number.  i.e. the X in <chX>
+                in the CC XML.
             cc_channel (int): Current Cost channel.
             current_cost (CurrentCost): a CurrentCost object
         
         """
         
+        self.sens_chan = sens_chan
         self.cc_channel = cc_channel         
         self.current_cost = current_cost
 
     def __str__(self):
-        return '{} {}'.format(self.current_cost.port, self.cc_channel)
+        return '{} {}/{}'.format(self.current_cost.port, self.cc_channel,
+                                 self.sens_chan)
     
     def __repr__(self):
         return 'Location({})'.format(str(self))
@@ -342,6 +354,13 @@ class Location(object):
 
 class Sensor(object):
     """Represent physical sensors: IAMs and CT clamps.
+    
+    Note that this is something different to the <sensor> number reported
+    in the Current Cost XML.  <sensor> in the CC XML should really be called
+    <transmitter> because each <transmitter> can have several sensors IMHO.
+    
+    An instantiation of this class genuinely represents a *single sensor* 
+    i.e. a single CT clamp or a single IAM, not a transmitter.
     
     Static attributes:
 
@@ -351,7 +370,8 @@ class Sensor(object):
         time_info (TimeInfo): statistics describing how frequently this
             sensor is updated.
             
-        location (Location): the physical location of this Sensor.
+        location (Location): the physical Location of this Sensor. i.e.
+            the specific current cost and the CCsens number.
         
         locations (list): every Location this sensor has been observed
             since this instance of iam_logger started running.
@@ -361,7 +381,10 @@ class Sensor(object):
             have no way to enforce uniqueness so conflicts can occur.
             (At startup, the load_config function checks for conflicting 
             radio IDs in the radioID.dat file.)
-            
+
+        sens_chan (int): the "sensor channel" reported in the CurrentCost
+            XML.  i.e. X in the XML element <chX></chX>
+
         channel (str): this Sensor's channel number (unique to this Sensor)
             taken from config file radioIDs.dat. 'channel' will not exist
             if there is no radio_id entry in radioIDs.dat for this sensor.
@@ -378,11 +401,12 @@ class Sensor(object):
     """
     
     # string to format both numeric data and human-readable column HEADERS:
-    _STR_FORMAT = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
-    HEADERS = _STR_FORMAT.format('LABEL', 'CHAN', 'CCchan', 'WATTS',
+    _STR_FORMAT_TXT = '{:>20.20} {:>4} {:>6} {:>5} {} {:>7} {}\n'
+    _STR_FORMAT_NUM = '{:>20.20} {:>4} {:>4}/{:>1} {:>5} {} {:>7} {}\n'
+    HEADERS = _STR_FORMAT_TXT.format('LABEL', 'CHAN', 'CCsens', 'WATTS',
                                 TimeInfo.HEADERS, 'RADIOID', 'LOCATIONS') 
     
-    def __init__(self, radio_id, channel='-', label='-'):
+    def __init__(self, radio_id, sens_chan=1, channel='-', label='-'):
         """Construct a Sensor.
         
         Args:
@@ -390,6 +414,9 @@ class Sensor(object):
             radio_id (int): the radio ID unique to this physical sensor.
             
         Kwargs:
+        
+            sens_chan (int): the "sensor channel" reported in the CurrentCost
+                XML.  i.e. X in the XML element <chX></chX>
         
             channel (str): the channel number given in radioIDs.dat and
                 used in the filename for the data file.
@@ -402,13 +429,14 @@ class Sensor(object):
         self.location = '-'                        
         self.locations = {} 
         self.radio_id = radio_id 
+        self.sens_chan = sens_chan
         self.channel = channel
         self.label = label
         self.watts = '-'
         self._last_timecode_written_to_disk = None
         self.never_zero = False
 
-    def update(self, watts, cc_channel, current_cost):
+    def update(self, watts, sens_chan, cc_sens, current_cost):
         """Process a new sample.
         
         We use timestamp from local computer, not from the Current Cost.
@@ -417,8 +445,11 @@ class Sensor(object):
         
             watts (int): instantaneous power measured in watts.
             
-            cc_channel (int): the Current Cost channel this sensor 
-                appears on.
+            sens_chan (int): the sensor channel.  i.e. the X in <chX></chX>
+                in the CC XML.
+            
+            cc_sens (int): the Current Cost <sensor> number this sensor 
+                appears on; i.e. the <sensor> number in the CC XML.
             
             current_cost (CurrentCost): the Current Cost this sensor
                 appears on
@@ -433,7 +464,7 @@ class Sensor(object):
         
         self.time_info.update()
         self.watts = watts
-        self.location = Location(cc_channel, current_cost) 
+        self.location = Location(sens_chan, cc_sens, current_cost) 
         
         if str(self.location) in self.locations.keys():
             self.locations[ str(self.location) ] += 1
@@ -447,8 +478,10 @@ class Sensor(object):
             label = "*" + self.label
         else:
             label = self.label
-        return Sensor._STR_FORMAT.format(label, self.channel,
-                                       self.location.cc_channel, self.watts, 
+        return Sensor._STR_FORMAT_NUM.format(label, self.channel,
+                                       self.location.cc_channel,
+                                       self.location.sens_chan,
+                                       self.watts, 
                                        self.time_info, self.radio_id, 
                                        self.locations) 
 
@@ -512,7 +545,7 @@ class Manager(object):
         if self.args.print_xml:
             print("Press CTRL+C to stop.\n")
             signal.pause() # Note: signal.pause can't be used on Windows!
-        elif self.args.noDisplay:
+        elif self.args.no_display:
             self.write_stats_to_file()                
         else:
             self.write_stats_to_screen()
@@ -664,7 +697,13 @@ class CurrentCost(threading.Thread):
     
     Static attributes:
     
-        sensors: dict of all Sensors, keyed by radio_id
+        sensors: dict of all Sensors, keyed by (radio_id, sens_chan)
+
+        MAX_SENSORS_PER_TRANSMITTER (int) : the transmitters for the 
+            CT clamps can take 3 CT clamps per TX        
+
+        MAX_RETRIES (int): maximum number of times to re-try connecting to
+            the serial port before giving up.
     
     Attributes:
     
@@ -676,7 +715,7 @@ class CurrentCost(threading.Thread):
         serial (serial.Serial): a serial.Serial object.
         
         local_sensors (dict): Dict of Sensors on this CurrentCost,
-            keyed by cc_channel.
+            keyed by (cc_channel, sens_chan)
             
         dsb (str): Days since birth. Only set after calling get_info().
         
@@ -686,7 +725,7 @@ class CurrentCost(threading.Thread):
     """
 
     sensors = {}
-    
+    MAX_SENSORS_PER_TRANSMITTER = 3 
     MAX_RETRIES = 10
 
     def __init__(self, port):
@@ -866,33 +905,33 @@ class CurrentCost(threading.Thread):
         radio_id   = int(data['id'])
         cc_channel = int(data['sensor']) # channel on this Current Cost
         watts      = []
-        watts.append(data['ch1/watts'])
-        watts.append(data['ch2/watts'])
-        watts.append(data['ch3/watts'])
-        
-        # convert watts to ints
-        for i in range(3):
-            if watts[i] is not None:
-                watts[i] = int(watts[i])
+        for sens_chan in range(1, CurrentCost.MAX_SENSORS_PER_TRANSMITTER+1):
+            chXwatts_str = 'ch{:d}/watts'.format(sens_chan)
+            chXwatts     = data[chXwatts_str]
+            # convert watts to ints
+            if chXwatts is not None:
+                chXwatts = int(chXwatts)
+            watts.append(chXwatts)
         
         lock = threading.Lock()
         
-        for s_chan in range(1,4): # s_chan = sensor channel (e.g. multiple CT clamps)
-            if watts[s_chan-1] is not None:
-                key = (radio_id, s_chan)
+        # sens_chan = sensor channel (e.g. multiple CT clamps)
+        for sens_chan in range(1,CurrentCost.MAX_SENSORS_PER_TRANSMITTER+1): 
+            if watts[sens_chan-1] is not None:
+                key = (radio_id, sens_chan)
                 if key not in CurrentCost.sensors.keys():
-                    logging.info("CURRENTCOST: making new Sensor for radio ID {} and s_chan {}"
-                         .format(radio_id, s_chan))
+                    logging.info("CURRENTCOST: making new Sensor for radio ID {} and sens_chan {}"
+                         .format(radio_id, sens_chan))
                     lock.acquire()
-                    CurrentCost.sensors[key] = Sensor(radio_id)
+                    CurrentCost.sensors[key] = Sensor(radio_id, sens_chan)
                     lock.release()
         
                 lock.acquire()
-                CurrentCost.sensors[key].update(watts[s_chan-1], cc_channel, self)
+                CurrentCost.sensors[key].update(watts[sens_chan-1], sens_chan, cc_channel, self)
                 lock.release()
         
-                # Maintain a local dict of sensors connected to this _current cost
-                self.local_sensors[(cc_channel, s_chan)] = CurrentCost.sensors[key]
+                # Maintain a local dict of sensors connected to this current cost
+                self.local_sensors[(cc_channel, sens_chan)] = CurrentCost.sensors[key]
 
     def __str__(self):
         string  = "port      = {}\n".format(self.port)        
@@ -922,7 +961,7 @@ def main():
     parser = argparse.ArgumentParser(description='Log data from multiple '
                                      'Current Cost IAMs.')
     
-    parser.add_argument('--noDisplay', dest='noDisplay', action='store_const',
+    parser.add_argument('--no_display', dest='no_display', action='store_const',
                         const=True, default=False, 
                         help='Do not display info to std out. ' 
                         'Will be enabled automatically if called with nohup.')
@@ -951,8 +990,8 @@ def main():
     # Check if iam_logger.py is being run using nohup
     if not os.isatty(sys.stdout.fileno()):
         logging.info("stdout is not a TTY so let's assume this program\n"
-                     "   has been called using nohup: enabling --noDisplay.")
-        args.noDisplay = True
+                     "   has been called using nohup: enabling --no_display.")
+        args.no_display = True
 
     # load config files and initialise Current Costs
     current_costs = load_config()    
