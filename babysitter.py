@@ -105,10 +105,13 @@ class Checker:
         state = self.state # cache to avoid this changing under us        
         if state == self.last_state:
             return False
-        else:
+        elif state == Checker.FAIL:
+            logger.warning('state change to FAIL: {}'.format(self))            
+        elif state == Checker.OK:
             logger.info('state change: {}'.format(self))
-            self.last_state = state
-            return True
+        
+        self.last_state = state
+        return True
     
     def __str__(self):
         return '{} = {}'.format(self.name.rpartition('/')[2], # remove path
