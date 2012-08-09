@@ -11,9 +11,9 @@ from abc import ABCMeta, abstractproperty
 import xml.etree.ElementTree as ET # for XML parsing
 import signal
 
-# TODO: Send daily heartbeat
+# TODO: Send daily heartbeat. With graphs.
 
-# TODO: check git is updating (maybe just check age of .git??)
+# TODO: send messages in HTML. Use RED for FAILs.  Use <ul> for lists.
 
 """
 ***********************************
