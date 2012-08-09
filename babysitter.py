@@ -123,7 +123,7 @@ class Process(Checker):
     
     Attributes:
         name (str): the process name as it appears in `ps -A`
-        restart_string (str): the command used to restart this process            
+        restart_command (str): the command used to restart this process            
     
     """
 
@@ -132,7 +132,7 @@ class Process(Checker):
         Args:
             name (str): the process name as it appears in `ps -A`
         """
-        self.restart_string = None
+        self.restart_command = None
         super(Process, self).__init__(name)
 
     @property
@@ -141,7 +141,7 @@ class Process(Checker):
         return pid_string.strip()
     
     def restart(self):
-        if self.restart_string is None:
+        if self.restart_command is None:
             logger.info("No restart string for {}".format(self.name))
             return
         
