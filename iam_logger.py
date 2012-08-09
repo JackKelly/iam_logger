@@ -1,9 +1,5 @@
 #! /usr/bin/python
 
-"""
-REQUIREMENTS:
-    * gitpython           
-"""
 
 from __future__ import print_function, division
 import serial # for pulling data from Current Cost
@@ -16,12 +12,6 @@ import argparse
 import threading
 import signal
 import logging
-try:
-    import git # gitpython
-except Exception, e:
-    print("Failed to import git. Install gitpython using "
-          "`sudo easy_install gitpython`.", file=sys.stderr)
-    raise 
 
 # TODO: Don't use git.  Instead use rsync.  Study computer sends data to 
 # living room computer every 5 mins.  Living room computer draws plots and 
@@ -38,8 +28,8 @@ except Exception, e:
 
 _abort = False # Make this True to halt all threads
 _directory = None # The _directory to write data to. Set by config.xml
-_git_update_period = 60 * 60 # in seconds
-_git_condition_variable = threading.Condition()
+_rsync_update_period = 60 * 60 # in seconds
+_rsync_condition_variable = threading.Condition()
 
 #==============================================================================
 # UTILITY FUNCTIONS
@@ -90,10 +80,10 @@ def load_config():
         _directory = _directory + '/'
         
     # git update frequency
-    global _git_update_period
+    global _rsync_update_period
     git_update_period = config_tree.findtext("gitupdatefrequency")
     if git_update_period is not None:
-        _git_update_period = git_update_period
+        _rsync_update_period = git_update_period
     
     # load serialports
     serials_etree = config_tree.findall("serialport")
@@ -238,9 +228,9 @@ def _signal_handler(signal_number, frame):
 
 def _notify_git():
     logging.debug("Notifying git")
-    _git_condition_variable.acquire()
-    _git_condition_variable.notify()
-    _git_condition_variable.release()    
+    _rsync_condition_variable.acquire()
+    _rsync_condition_variable.notify()
+    _rsync_condition_variable.release()    
 
 
 def _alarm_handler(signal_number, frame):
@@ -595,101 +585,56 @@ class Manager(object):
 # (i.e. classes which are instantiated as threads)
 #==============================================================================
 
-class _PushToGit(threading.Thread):
-    """Simple little thread for pushing files to git.
-    
-    Will only terminate rest of program if git.Repo() fails.  If an error 
-    occurs later then exception info will be logged but _PushToGit won't
-    try to bring down the entire iam_logger app.
-    """
-    
-    # GitPython tutorial here:
-    # http://packages.python.org/GitPython/0.3.2/tutorial.html
-    #
-    # GitPython API refernce here:
-    # http://packages.python.org/GitPython/0.3.2/reference.html
+class _Rsync(threading.Thread):
     
     def __init__(self):
-        """Init Thread superclass and git repo."""
-        
-        threading.Thread.__init__(self, name="_PushToGit")
-        try:
-            self.repo = git.Repo(_directory)
-            self.origin = self.repo.remotes.origin
-            self.index = self.repo.index
-        except Exception, e:
-            _abort_now(exception=e, notify_git=False)
-            raise
-        else:
-            logging.info("GIT: repo {}".format(_directory))                 
+        threading.Thread.__init__(self, name="_Rsync")               
     
     def _try_to_release(self):
         try:
-            _git_condition_variable.release()
+            _rsync_condition_variable.release()
         except RuntimeError, e: # "cannot release un-acquired lock"
-            logging.info("Ignoring exception while trying to release git "
+            logging.info("Ignoring exception while trying to release rsync "
                          "condition variable: " + str(e))
             pass # we don't care if we haven't acquired lock yet
     
     def run(self):
         try:
-            self._git_push() # do a git push at start-up
+            self._rsync_push() # do a git push at start-up
         except Exception:
             logging.exception("")
             
         while not _abort:
-            # _git_condition_variable will be notified when SIGALRM fires.
+            # _rsync_condition_variable will be notified when SIGALRM fires.
             # (this is the mechanism by which we periodically push to git)
-            _git_condition_variable.acquire()
-            _git_condition_variable.wait()
+            _rsync_condition_variable.acquire()
+            _rsync_condition_variable.wait()
             
             if _abort:
                 break
             
             try:
-                self._git_push()
+                self._rsync_push()
             except Exception:
-                logging.exception("GIT exception.")
+                logging.exception("")
 
-            signal.alarm(_git_update_period)
+            signal.alarm(_rsync_update_period)
             self._try_to_release()
         
         self._try_to_release()
             
-    def _git_push(self):
-        """Push to git remote (e.g. github)."""
-    
+    def _rsync_push(self):
         try:
-            # pull to make sure we're up to date otherwise
-            # push will fail.            
-            logging.info("GIT: Starting git pull. If we get stuck here then "
-                         "ensure that\n"
-                         "        git pull can be executed without a password.")
-            info = self.origin.pull()[0]
-            logging.info("GIT: pull response: {}".format(info.note))            
-            logging.info("GIT: running git add...")             
-            self.index.add([_directory + '*.dat'])
-            hostname = os.uname()[1]
-            commit_msg = 'Automatic upload from {}.'.format(hostname)
-            logging.info("GIT: commiting with message: {}".format(commit_msg))
-            response = self.index.commit(commit_msg)             
-            logging.info("GIT: commit response: {}".format(response))
-            logging.info("GIT: running git push...")             
-            info = self.origin.push()[0]
-            logging.info("GIT: push response: {}".format(info.summary.strip()))
-        except IndexError, e:
-            logging.info("GIT: _git_push caught IndexError. This is probably "
-                         "because we're trying to terminate\n"
-                         "       while git push is running: " + str(e))
+            pass
         except Exception:
             raise
         else:
             next_run_time = ((datetime.datetime.now() +
-                              datetime.timedelta(seconds=_git_update_period))
+                              datetime.timedelta(seconds=_rsync_update_period))
                               .strftime('%H:%M:%S'))
-            logging.info("GIT: Finished git push.  Will run again in "
+            logging.info("RSYNC: Finished rsync push.  Will run again in "
                          "{} seconds time at {}.\n"
-                         .format(_git_update_period, next_run_time))
+                         .format(_rsync_update_period, next_run_time))
 
 
 class CurrentCost(threading.Thread):
@@ -1003,11 +948,11 @@ def main():
     # We use the ALARM signal to trigger a git push: 
     signal.signal(signal.SIGALRM, _alarm_handler)
     logging.info("MAIN: Setting SIGALRM with period = {}s."
-                 .format(_git_update_period))
-    signal.alarm(_git_update_period)
+                 .format(_rsync_update_period))
+    signal.alarm(_rsync_update_period)
 
     # start git push
-    git_push = _PushToGit()
+    git_push = _Rsync()
     git_push.start()
     
     # initialise and run Manager
