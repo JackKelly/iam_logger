@@ -60,6 +60,8 @@ import signal
                 <restart_command>sudo service ntp restart</restart_command>
             </process>
             
+            <filegrows>cron.log</filegrows>
+            
         </config>
     
     
@@ -219,7 +221,11 @@ class FileGrows(Checker):
 
     @property        
     def size(self):
-        return os.path.getsize(self.name)
+        try:
+            s = os.path.getsize(self.name)
+        except OSError: # file doesn't exist
+            s = 0
+        return s 
     
     def __str__(self):
         msg = super(FileGrows, self).__str__()
