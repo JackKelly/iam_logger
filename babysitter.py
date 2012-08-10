@@ -205,8 +205,9 @@ class FileGrows(Checker):
             timeout (int or str) : time in seconds after which this file is 
                 considered overdue.
         """
-        super(FileGrows, self).__init__(name)
+        self.name = name
         self.last_size = self.size
+        super(FileGrows, self).__init__(name)
 
     @property
     def state(self):
@@ -320,7 +321,8 @@ class Manager(object):
         # Load file grows
         filegrows_etree = config_tree.findall("filegrows")
         for f in filegrows_etree:
-            self.append(FileGrows(f.text))
+            if f.text is not None:
+                self.append(FileGrows(f.text))
         
 
     def send_email(self, body, subject):
