@@ -28,8 +28,6 @@ import logging
 
 _abort = False # Make this True to halt all threads
 _directory = None # The _directory to write data to. Set by config.xml
-_rsync_update_period = 60 * 60 # in seconds
-_rsync_condition_variable = threading.Condition()
 
 #==============================================================================
 # UTILITY FUNCTIONS
@@ -201,16 +199,13 @@ def load_radio_id_mapping(filename):
             labels_fh.close()
     
 
-def _abort_now(exception=None, notify_git=True):
+def _abort_now(exception=None):
     if exception is not None:
         print_to_stdout_and_log(str(exception), logging.CRITICAL )
     
     print_to_stdout_and_log("Aborting...")        
     global _abort
-    _abort = True
-
-    if notify_git:
-        _notify_git()    
+    _abort = True 
 
 
 def _signal_handler(signal_number, frame):
@@ -223,19 +218,8 @@ def _signal_handler(signal_number, frame):
     signal_names = {signal.SIGINT: 'SIGINT', signal.SIGTERM: 'SIGTERM'}
     print_to_stdout_and_log("\nSignal {} received."
                                      .format(signal_names[signal_number]))
-    _abort_now()
+    _abort_now() 
 
-
-def _notify_git():
-    logging.debug("Notifying git")
-    _rsync_condition_variable.acquire()
-    _rsync_condition_variable.notify()
-    _rsync_condition_variable.release()    
-
-
-def _alarm_handler(signal_number, frame):
-    logging.info("_alarm_handler: SIGALRM alarm caught.")
-    _notify_git()
 
 #==============================================================================
 # CLASSES
@@ -580,62 +564,6 @@ class Manager(object):
             
         return string
 
-#==============================================================================
-# threading.Thread subclasses
-# (i.e. classes which are instantiated as threads)
-#==============================================================================
-
-class _Rsync(threading.Thread):
-    
-    def __init__(self):
-        threading.Thread.__init__(self, name="_Rsync")               
-    
-    def _try_to_release(self):
-        try:
-            _rsync_condition_variable.release()
-        except RuntimeError, e: # "cannot release un-acquired lock"
-            logging.info("Ignoring exception while trying to release rsync "
-                         "condition variable: " + str(e))
-            pass # we don't care if we haven't acquired lock yet
-    
-    def run(self):
-        try:
-            self._rsync_push() # do a git push at start-up
-        except Exception:
-            logging.exception("")
-            
-        while not _abort:
-            # _rsync_condition_variable will be notified when SIGALRM fires.
-            # (this is the mechanism by which we periodically push to git)
-            _rsync_condition_variable.acquire()
-            _rsync_condition_variable.wait()
-            
-            if _abort:
-                break
-            
-            try:
-                self._rsync_push()
-            except Exception:
-                logging.exception("")
-
-            signal.alarm(_rsync_update_period)
-            self._try_to_release()
-        
-        self._try_to_release()
-            
-    def _rsync_push(self):
-        try:
-            pass
-        except Exception:
-            raise
-        else:
-            next_run_time = ((datetime.datetime.now() +
-                              datetime.timedelta(seconds=_rsync_update_period))
-                              .strftime('%H:%M:%S'))
-            logging.info("RSYNC: Finished rsync push.  Will run again in "
-                         "{} seconds time at {}.\n"
-                         .format(_rsync_update_period, next_run_time))
-
 
 class CurrentCost(threading.Thread):
     """Represents a physical Current Cost ENVI home energy monitor.
@@ -945,15 +873,6 @@ def main():
     logging.info("MAIN: setting signal handlers")
     signal.signal(signal.SIGINT,  _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
-    # We use the ALARM signal to trigger a git push: 
-    signal.signal(signal.SIGALRM, _alarm_handler)
-    logging.info("MAIN: Setting SIGALRM with period = {}s."
-                 .format(_rsync_update_period))
-    signal.alarm(_rsync_update_period)
-
-    # start git push
-    git_push = _Rsync()
-    git_push.start()
     
     # initialise and run Manager
     manager = Manager(current_costs, args)        
