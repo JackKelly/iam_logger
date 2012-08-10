@@ -487,7 +487,7 @@ class Sensor(object):
         
         filename =  _directory + "channel_" + str(chan) + ".dat"
         filehandle = open(filename, 'a+')
-        data = '{:d} {} {}\n'.format(timecode, self.watts, self.location)
+        data = '{:d} {}\n'.format(timecode, self.watts)
         filehandle.write(data)
         filehandle.close()
         
