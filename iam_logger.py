@@ -12,8 +12,6 @@ import threading
 import signal
 import logging
 
-# TODO: Write a script to check sync between aggregate files on both computers
-
 #==============================================================================
 # GLOBALS
 #==============================================================================
@@ -68,12 +66,6 @@ def load_config():
     _directory    = config_tree.findtext("directory") # File to save data to
     if not _directory.endswith('/'):
         _directory = _directory + '/'
-        
-    # git update frequency
-    global _rsync_update_period
-    git_update_period = config_tree.findtext("gitupdatefrequency")
-    if git_update_period is not None:
-        _rsync_update_period = git_update_period
     
     # load serialports
     serials_etree = config_tree.findall("serialport")
@@ -874,9 +866,7 @@ def main():
     except Exception:
         manager.stop()
         raise
-    
-    print_to_stdout_and_log("Waiting for git thread to stop...")                 
-    git_push.join()
+
     print_to_stdout_and_log("Done. Unixtime = {:.0f}\n\n"
                             .format(time.time()))
     logging.shutdown()      
