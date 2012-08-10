@@ -205,7 +205,7 @@ class FileGrows(Checker):
             timeout (int or str) : time in seconds after which this file is 
                 considered overdue.
         """
-        super(File, self).__init__(name)
+        super(FileGrows, self).__init__(name)
         self.last_size = self.size
 
     @property
