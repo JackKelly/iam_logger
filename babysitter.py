@@ -222,7 +222,7 @@ class FileGrows(Checker):
         return os.path.getsize(self.name)
     
     def __str__(self):
-        msg = super(File, self).__str__()
+        msg = super(FileGrows, self).__str__()
         msg += ", size {} bytes.".format(self.size)
         return msg
 
