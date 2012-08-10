@@ -5,7 +5,6 @@ from __future__ import print_function, division
 import serial # for pulling data from Current Cost
 import xml.etree.ElementTree as ET # for XML parsing
 import time
-import datetime
 import sys
 import os
 import argparse
@@ -13,14 +12,7 @@ import threading
 import signal
 import logging
 
-# TODO: Don't use git.  Instead use rsync.  Study computer sends data to 
-# living room computer every 5 mins.  Living room computer draws plots and 
-# sends data to my Site5 account every week. 
-
 # TODO: Write a script to check sync between aggregate files on both computers
-
-# TODO: Get old laptop running in office for logging.
-
 
 #==============================================================================
 # GLOBALS
