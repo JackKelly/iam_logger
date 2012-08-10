@@ -196,6 +196,36 @@ class File(Checker):
         return msg
 
 
+class FileGrows(Checker):
+    def __init__(self, name):
+        """FileGrows constructor
+        
+        Args:
+            name (str) : including full path
+            timeout (int or str) : time in seconds after which this file is 
+                considered overdue.
+        """
+        super(File, self).__init__(name)
+        self.last_size = self.size
+
+    @property
+    def state(self):
+        if self.size != self.last_size:
+            self.last_size = self.size
+            return Checker.FAIL
+        else:
+            return Checker.OK
+
+    @property        
+    def size(self):
+        return os.path.getsize(self.name)
+    
+    def __str__(self):
+        msg = super(File, self).__str__()
+        msg += ", size {} bytes.".format(self.size)
+        return msg
+
+
 class DiskSpaceRemaining(Checker):
     
     def __init__(self, threshold):
@@ -286,6 +316,12 @@ class Manager(object):
             p = Process(process.findtext('name'))
             p.restart_command = process.findtext('restart_command')
             self.append(p)
+            
+        # Load file grows
+        filegrows_etree = config_tree.findall("filegrows")
+        for f in filegrows_etree:
+            self.append(FileGrows(f.text))
+        
 
     def send_email(self, body, subject):
         hostname = os.uname()[1]
