@@ -13,6 +13,8 @@ import signal
 
 # TODO: Send daily heartbeat. With graphs.
 
+# TODO: email end of cron.log
+
 # TODO: send messages in HTML. Use RED for FAILs.  Use <ul> for lists.
 
 """
@@ -208,17 +210,13 @@ class FileGrows(Checker):
                 considered overdue.
         """
         self.name = name
-        self.last_size = self.size
+        self.initial_size = self.size
         super(FileGrows, self).__init__(name)
 
     @property
     def state(self):
-        if self.size != self.last_size:
-            self.last_size = self.size
-            return Checker.FAIL
-        else:
-            return Checker.OK
-
+        return self.size == self.initial_size
+    
     @property        
     def size(self):
         try:
