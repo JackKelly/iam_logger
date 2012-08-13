@@ -233,13 +233,14 @@ class FileGrows(Checker):
 
 class DiskSpaceRemaining(Checker):
     
-    def __init__(self, threshold):
+    def __init__(self, threshold, path='/'):
         """
         Args:
             threshold (int or str): number of MBytes of free space below which
                 state will change to FAIL.
         """
-        self.threshold = int(threshold)        
+        self.threshold = int(threshold)
+        self.path = path
         super(DiskSpaceRemaining, self).__init__('disk space')
         
     @property
@@ -250,7 +251,7 @@ class DiskSpaceRemaining(Checker):
     def available_space(self):
         """Returns available disk space in MBytes."""
         # From http://stackoverflow.com/a/787832/732596
-        s = os.statvfs('/')
+        s = os.statvfs(self.path)
         return (s.f_bavail * s.f_frsize) / 1024**2      
     
     def __str__(self):
@@ -305,9 +306,11 @@ class Manager(object):
                      .format(self.SMTP_SERVER, self.EMAIL_FROM, self.EMAIL_TO))
     
         # Disk space checker
-        disk_space_threshold = config_tree.findtext("disk_space_threshold")
-        if disk_space_threshold is not None:
-            self.append(DiskSpaceRemaining(disk_space_threshold))
+        disk_space_threshold_etree = config_tree.find("disk_space")
+        if disk_space_threshold_etree is not None:
+            disk_space_threshold = disk_space_threshold_etree.findtext("threshold")
+            mount_point = disk_space_threshold_etree.findtext("mount_point")
+            self.append(DiskSpaceRemaining(disk_space_threshold, mount_point))
     
         # Load files
         files_etree = config_tree.findall("file")
