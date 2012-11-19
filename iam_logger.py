@@ -835,12 +835,15 @@ def main():
 
     # Set up logging
     numeric_level = getattr(logging, args.loglevel.upper(), None)
+    
     if not isinstance(numeric_level, int):
         raise ValueError('Invalid log level: {}'.format(args.loglevel))
+    
     logging.basicConfig(filename='iam_logger.log', level=numeric_level,
                         format='%(asctime)s level=%(levelname)s: '
                         'function=%(funcName)s, thread=%(threadName)s'
                         '\n   %(message)s')
+    
     logging.debug('\nMAIN: iam_logger.py starting up. Unixtime = {:.0f}'
                   .format(time.time()))
 
